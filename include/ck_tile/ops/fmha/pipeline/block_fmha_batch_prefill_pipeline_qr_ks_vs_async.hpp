@@ -546,24 +546,24 @@ struct BlockFmhaBatchPrefillPipelineQRKSVSAsync
         // The decomposition pattern differs by memory layout:
         //
         // VECTORIZED_LAYOUT (ColumnMajor, custom distribution):
-        //   3D decomposition: K = K2 × K0 × K1
+        //   3D decomposition: K = K2 * K0 * K1
         //   - K2 (V_KIterOuter): Outer iteration count
         //   - K0 (V_KLanes):     Lanes for K dimension (matches GEMM kABKLane)
         //   - K1 (V_KIterInner): Vector load size (matches GEMM kKPerThread)
         //   - hs_lengthss_[I1] = {K2, K0, K1}, size = 3 (or {K0, K1} size = 2 if no outer iter)
         //
         // LINEAR_LAYOUT ColumnMajor (base class distribution):
-        //   2D decomposition: K = K0 × K1
+        //   2D decomposition: K = K0 * K1
         //   - K0: Lanes for K dimension (may not match GEMM kABKLane)
         //   - K1: Vector load size
         //   - hs_lengthss_[I1] = {K0, K1}, size = 2
         //
         // LINEAR_LAYOUT RowMajor (base class distribution):
-        //   4D decomposition: K = K0 × K1 × K2 × K3 (uses shuffle_tile for GEMM alignment)
-        //   3D decomposition: K = K0 × K1 × K2 (fallback case)
+        //   4D decomposition: K = K0 * K1 * K2 * K3 (uses shuffle_tile for GEMM alignment)
+        //   3D decomposition: K = K0 * K1 * K2 (fallback case)
         //   - Page lookup uses Y-space's last dimension only (inner iteration)
         //
-        // V_PageIdxRepeat = total number of page lookups per thread = V_KIterOuter × V_KIterInner
+        // V_PageIdxRepeat = total number of page lookups per thread = V_KIterOuter * V_KIterInner
         constexpr index_t V_KIterInner = VDstrEncode::hs_lengthss_[I1].back();
 
         // Compute V_KIterOuter and V_KLanes based on memory layout and K decomposition

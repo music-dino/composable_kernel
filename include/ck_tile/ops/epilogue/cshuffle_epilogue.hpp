@@ -609,7 +609,7 @@ struct CShuffleEpilogue
                 sn_tile = load_tile(scale_n_window); // col scales in permuted layout
             }
 
-            // Pack 4 “rows per lane” as you already do
+            // Pack 4 "rows per lane" as you already do
             static_for<0, NRepeat, 1>{}([&](auto n_idx) {
                 // source indices in shuffle_acc: (n_idx * product(Y) + row)
                 const index_t plane = c_warp_y_lengths.product();

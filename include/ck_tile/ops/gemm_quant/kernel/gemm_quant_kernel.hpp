@@ -911,7 +911,7 @@ struct QuantGemmKernel
                     // Number of K-dimension quantization groups per block
                     constexpr auto bqk_per_block = TilePartitioner::KPerBlock / BQuantGroupSize::kK;
 
-                    // The pre-shuffled layout flattens warp_n ×
+                    // The pre-shuffled layout flattens warp_n *
                     // bqk_per_block scales per row, Padded up to warp_size
                     // to ensure coalesced memory access.
                     constexpr auto tile_window_width =
@@ -919,7 +919,7 @@ struct QuantGemmKernel
 
                     // Adapts based on fine vs coarse quantization granularity:
                     //   - Fine-grained (BQuantGroupSize::kN < warp_n):
-                    //       Multiple quant groups per warp → fewer rows needed per block.
+                    //       Multiple quant groups per warp -> fewer rows needed per block.
                     //       height = block_n / warp_per_group
                     //
                     //   - Coarse-grained (BQuantGroupSize::kN >= warp_n):
