@@ -878,10 +878,10 @@ TEST_CASE(benchmark_fmha_fwd)
 {
     // Benchmark configuration - matches common example settings
     ck::host::device_fmha_fwd::Problem prob;
-    prob.M             = 512;  // seqlen_q
-    prob.N             = 1024;  // seqlen_k
-    prob.K             = 32;   // hdim_q
-    prob.O             = 32;   // hdim_v
+    prob.M             = 1024;  // seqlen_q
+    prob.N             = 512; // seqlen_k
+    prob.K             = 128;   // hdim_q
+    prob.O             = 64;   // hdim_v
     prob.batch         = 2;
     prob.nhead         = 4;
     prob.dtype         = ck::host::DataType::Half;
@@ -892,7 +892,7 @@ TEST_CASE(benchmark_fmha_fwd)
     const float scale_s = 1.0f / std::sqrt(static_cast<float>(prob.K));
 
     constexpr int warmup_iters = 1;
-    constexpr int bench_iters  = 500;
+    constexpr int bench_iters  = 1;
 
     auto solutions = prob.GetSolutions("gfx90a");
     std::cout << "Number of solutions: " << solutions.size() << std::endl;

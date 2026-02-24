@@ -36,12 +36,13 @@ using TileMap = std::map<std::pair<std::size_t, std::size_t>, std::vector<TileCo
 //   - bn1 = hdim_v (output head dimension processed per block)
 //   - bk1 = 32 (fixed for softmax/attention score reduction pipelining)
 //   - (wm0, wn0, wk0) and (wm1, wn1, wk1) must be valid MFMA sizes for the dtype
+//   - rm0=8 not supported when bn1 is not power-of-2 (V tensor distribution alignment)
 //
 // Valid fp16 MFMA sizes: (32,32,16), (16,16,16), (16,16,32), (4,64,16), (64,4,16)
 // However, not all are usable in this kernel:
 //   - (64,4,16), (4,64,16): warp_gemm_dispatcher has no template specialization
 //   - (32,32,8): produces invalid results (likely internal kernel issue)
-//   - (16,16,32): requires bk0=32, only usable when bk0max >= 64 (larger hdim buckets)
+//   - (16,16,32): requires bk0 >= 2*wk0 (bk0 >= 64), only usable when bk0max >= 128
 //
 // clang-format off
 static const TileMap gfx9_fp16_tiles = {
@@ -53,18 +54,44 @@ static const TileMap gfx9_fp16_tiles = {
                   { 16,  32,  16,  32,  32,  32,   1,  1,  1,   1,  1,  1,  16, 16, 16,  16, 16, 16},
                   {128,  64,  16,  32,  32,  32,   8,  1,  1,   8,  1,  1,  16, 16, 16,  16, 16, 16}}},
     //
-    {{64, 64},   {{ 16,  32,  64,  64,  32,  64,   1,  1,  1,   1,  1,  1,  16, 16, 32,  16, 16, 32},
-                  { 32,  32,  64,  64,  32,  64,   1,  1,  1,   1,  1,  1,  32, 32, 16,  32, 32, 16},
-                  {128,  64,  32,  64,  32,  64,   4,  1,  1,   4,  1,  1,  32, 32, 16,  32, 32, 16}}},
-    {{80, 96},   {{128, 128,  16,  96,  32,  80,   4,  1,  1,   4,  1,  1,  32, 32, 16,  32, 32, 16}}},
-    {{96, 128},  {{128, 128,  32, 128,  32,  96,   4,  1,  1,   4,  1,  1,  32, 32, 16,  32, 32, 16}}},
-    {{128, 128}, {{ 16,  32,  64, 128,  32, 128,   1,  1,  1,   1,  1,  1,  16, 16, 32,  16, 16, 32},
-                  { 32,  32, 128, 128,  32, 128,   1,  1,  1,   1,  1,  1,  32, 32, 16,  32, 32, 16},
-                  { 64, 128,  32, 128,  32, 128,   4,  1,  1,   4,  1,  1,  16, 16, 32,  16, 16, 16},
+    {{64, 64},   {{128,  64,  32,  64,  32,  64,   4,  1,  1,   4,  1,  1,  32, 32, 16,  32, 32, 16},
+                  { 64,  64,  32,  64,  32,  64,   2,  1,  1,   2,  1,  1,  32, 32, 16,  32, 32, 16},
+                  { 32,  64,  32,  64,  32,  64,   2,  1,  1,   2,  1,  1,  16, 16, 16,  16, 16, 16},
+                  { 64,  64,  32,  64,  32,  64,   4,  1,  1,   4,  1,  1,  16, 16, 16,  16, 16, 16},
+                  {128,  64,  32,  64,  32,  64,   8,  1,  1,   8,  1,  1,  16, 16, 16,  16, 16, 16},
+                  { 16,  64,  32,  64,  32,  64,   1,  1,  1,   1,  1,  1,  16, 16, 16,  16, 16, 16}}},
+    //
+    {{80, 96},   {{128, 128,  16,  96,  32,  80,   4,  1,  1,   4,  1,  1,  32, 32, 16,  32, 32, 16},
+                  { 16, 128,  16,  96,  32,  80,   1,  1,  1,   1,  1,  1,  16, 16, 16,  16, 16, 16},
+                  { 32, 128,  16,  96,  32,  80,   2,  1,  1,   2,  1,  1,  16, 16, 16,  16, 16, 16},
+                  { 64, 128,  16,  96,  32,  80,   2,  1,  1,   2,  1,  1,  32, 32, 16,  32, 32, 16},
+                  { 64, 128,  16,  96,  32,  80,   4,  1,  1,   4,  1,  1,  16, 16, 16,  16, 16, 16}}},
+    //
+    {{96, 128},  {{128, 128,  32, 128,  32,  96,   4,  1,  1,   4,  1,  1,  32, 32, 16,  32, 32, 16},
+                  { 16, 128,  32, 128,  32,  96,   1,  1,  1,   1,  1,  1,  16, 16, 16,  16, 16, 16},
+                  { 32, 128,  32, 128,  32,  96,   2,  1,  1,   2,  1,  1,  16, 16, 16,  16, 16, 16},
+                  { 64, 128,  32, 128,  32,  96,   2,  1,  1,   2,  1,  1,  32, 32, 16,  32, 32, 16},
+                  { 64, 128,  32, 128,  32,  96,   4,  1,  1,   4,  1,  1,  16, 16, 16,  16, 16, 16},
+                  {128, 128,  32, 128,  32,  96,   8,  1,  1,   8,  1,  1,  16, 16, 16,  16, 16, 16}}},
+    //
+    {{128, 128}, {{ 64, 128,  32, 128,  32, 128,   4,  1,  1,   4,  1,  1,  16, 16, 32,  16, 16, 16},
                   {128,  64,  32, 128,  16, 128,   4,  1,  1,   4,  1,  1,  32, 32, 16,  32, 32, 16},
-                  {128, 128,  32, 128,  32, 128,   4,  1,  1,   4,  1,  1,  32, 32, 16,  32, 32, 16}}},
+                  {128, 128,  32, 128,  32, 128,   4,  1,  1,   4,  1,  1,  32, 32, 16,  32, 32, 16},
+                  // MFMA 16x16x16 variants
+                  { 32, 128,  32, 128,  32, 128,   2,  1,  1,   2,  1,  1,  16, 16, 16,  16, 16, 16},
+                  { 64, 128,  32, 128,  32, 128,   4,  1,  1,   4,  1,  1,  16, 16, 16,  16, 16, 16},
+                  {128, 128,  32, 128,  32, 128,   8,  1,  1,   8,  1,  1,  16, 16, 16,  16, 16, 16},
+                  // MFMA 32x32x16 variants
+                  { 64, 128,  32, 128,  32, 128,   2,  1,  1,   2,  1,  1,  32, 32, 16,  32, 32, 16},
+                  // MFMA 16x16x32 for GEMM0, 16x16x16 for GEMM1 (wk1=32 produces invalid results)
+                  { 32, 128,  64, 128,  32, 128,   2,  1,  1,   2,  1,  1,  16, 16, 32,  16, 16, 16},
+                  { 64, 128,  64, 128,  32, 128,   4,  1,  1,   4,  1,  1,  16, 16, 32,  16, 16, 16},
+                  {128, 128,  64, 128,  32, 128,   8,  1,  1,   8,  1,  1,  16, 16, 32,  16, 16, 16}}},
+    //
     {{192, 128}, {{128, 128,  32, 128,  32, 192,   4,  1,  1,   4,  1,  1,  32, 32, 16,  32, 32, 16}}},
+    //
     {{192, 192}, {{128, 128,  32, 192,  32, 192,   4,  1,  1,   4,  1,  1,  32, 32, 16,  32, 32, 16}}},
+    //
     {{256, 256}, {{128, 128,  32, 256,  32, 256,   4,  1,  1,   4,  1,  1,  32, 32, 16,  32, 32, 16}}},
 };
 
@@ -209,24 +236,6 @@ std::vector<Operation> Operation::CreateOperations(const Problem& prob, const st
     {
         for(const auto& pipeline : pipelines)
         {
-            if(!IsGfx12(arch) && prob.dtype != DataType::Float)
-            {
-                bool is_bucket_128 = (bucket.bucket_hdim == 128 && bucket.bucket_hdim_v == 128);
-
-                if(is_bucket_128)
-                {
-                    if(tile.bn0 != 128)
-                        continue;
-                    if(pipeline.name != "qr_async" && tile.bk0 == 64)
-                        continue;
-                }
-                else
-                {
-                    // if(tile.bm0 != 128)
-                    //     continue;
-                }
-            }
-
             if(pipeline.name == "qr_async" || pipeline.name == "qr_async_trload")
             {
                 if(prob.dtype == DataType::Half && (prob.K % 8 != 0 || prob.O % 8 != 0))
@@ -234,6 +243,22 @@ std::vector<Operation> Operation::CreateOperations(const Problem& prob, const st
                 // Single-warp configs (rm0=1) produce incorrect results with async pipelines
                 if(tile.rm0 == 1)
                     continue;
+                // (96, 128) bucket: rm0 >= 4 with pad_n=false produces incorrect results
+                if(bucket.bucket_hdim == 96 && bucket.bucket_hdim_v == 128)
+                {
+                    if(!pipeline.pad_n && tile.rm0 >= 4)
+                        continue;
+                }
+                // (128, 128) bucket filters for async pipelines:
+                //   - bn0=64, bk1=16 config produces invalid results
+                //   - bk0=64 configs (MFMA 16x16x32) produce invalid results
+                if(bucket.bucket_hdim == 128 && bucket.bucket_hdim_v == 128)
+                {
+                    if(tile.bn0 == 64 && tile.bk1 == 16)
+                        continue;
+                    if(tile.bk0 == 64)
+                        continue;
+                }
             }
 
             if(!IsPaddingCompatible(pipeline, prob, tile, bucket.bucket_hdim, bucket.bucket_hdim_v))
