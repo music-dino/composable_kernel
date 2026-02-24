@@ -26,11 +26,14 @@ using half = _Float16;
 const std::string kernel_template = R"__ck__(
 #include <${include}>
 
-extern "C" __global__ void f(const ${dtype}* q, const ${dtype}* k, const ${dtype}* v, const ${dtype}* bias, ${dtype}* o) {
+using KernelType = ${template};
+
+extern "C" __launch_bounds__(KernelType::Kernel::kBlockSize, KernelType::Kernel::kBlockPerCu)
+__global__ void f(const ${dtype}* q, const ${dtype}* k, const ${dtype}* v, const ${dtype}* bias, ${dtype}* o) {
     
     constexpr float scale_s = ${scale_s};
     
-    using Kernel = ${template};
+    using Kernel = KernelType;
     
     constexpr auto desc = Kernel::make_descriptor(
         // Q
@@ -59,6 +62,8 @@ std::string make_kernel_source(const Problem& prob,
                                const Solution& solution,
                                const FmhaFwdRefParams& ref_params)
 {
+    auto template_string = solution.ToTemplateString();
+    //std::cout << template_string << std::endl;
     return ck::host::InterpolateString(
         kernel_template,
         {{"include", prob.GetIncludeHeader()},
@@ -867,6 +872,166 @@ TEST_CASE(test_fmha_fwd_with_bias)
 
         CHECK(allclose(result, o_ref, 0.0001, 0.0001));
     }
+}
+
+TEST_CASE(benchmark_fmha_fwd)
+{
+    // Benchmark configuration - matches common example settings
+    ck::host::device_fmha_fwd::Problem prob;
+    prob.M             = 512;  // seqlen_q
+    prob.N             = 1024;  // seqlen_k
+    prob.K             = 32;   // hdim_q
+    prob.O             = 32;   // hdim_v
+    prob.batch         = 2;
+    prob.nhead         = 4;
+    prob.dtype         = ck::host::DataType::Half;
+    prob.is_v_rowmajor = true;
+    prob.is_causal     = false;
+    prob.has_bias      = false;
+
+    const float scale_s = 1.0f / std::sqrt(static_cast<float>(prob.K));
+
+    constexpr int warmup_iters = 1;
+    constexpr int bench_iters  = 500;
+
+    auto solutions = prob.GetSolutions("gfx90a");
+    std::cout << "Number of solutions: " << solutions.size() << std::endl;
+
+    EXPECT(!solutions.empty());
+
+    const std::size_t q_size = prob.batch * prob.nhead * prob.M * prob.K;
+    const std::size_t k_size = prob.batch * prob.nhead * prob.N * prob.K;
+    const std::size_t v_size = prob.batch * prob.nhead * prob.N * prob.O;
+    const std::size_t o_size = prob.batch * prob.nhead * prob.M * prob.O;
+
+    // Initialize with random data and create reference buffers
+    std::mt19937 rng(42);
+    std::uniform_real_distribution<float> dist(-0.5f, 0.5f);
+
+    rtc::buffer<half> q_host(q_size), k_host(k_size), v_host(v_size);
+    std::vector<float> q_ref(q_size), k_ref(k_size), v_ref(v_size), o_ref(o_size);
+
+    auto fill_buffers = [&](auto& host, auto& ref) {
+        for(std::size_t i = 0; i < host.size(); ++i)
+        {
+            float val = dist(rng);
+            host[i]   = half(val);
+            ref[i]    = val;
+        }
+    };
+    fill_buffers(q_host, q_ref);
+    fill_buffers(k_host, k_ref);
+    fill_buffers(v_host, v_ref);
+
+    auto ref_params = make_ref_params(prob, scale_s);
+
+    // Compute reference output
+    cpu_attention_ref(q_ref, k_ref, v_ref, o_ref, ref_params);
+
+    // Calculate FLOPs for FMHA:
+    // Gemm0: Q @ K^T = [batch, nhead, M, K] @ [batch, nhead, K, N] -> [batch, nhead, M, N]
+    // FLOPs = 2 * batch * nhead * M * N * K
+    // Gemm1: softmax(Gemm0) @ V = [batch, nhead, M, N] @ [batch, nhead, N, O] -> [batch, nhead, M, O]
+    // FLOPs = 2 * batch * nhead * M * N * O
+    const double flops =
+        2.0 * prob.batch * prob.nhead * prob.M * prob.N * prob.K +
+        2.0 * prob.batch * prob.nhead * prob.M * prob.N * prob.O;
+
+    std::cout << "\n=== FMHA Forward Benchmark ===" << std::endl;
+    std::cout << "Problem: batch=" << prob.batch << ", nhead=" << prob.nhead
+              << ", M=" << prob.M << ", N=" << prob.N
+              << ", K=" << prob.K << ", O=" << prob.O << std::endl;
+    std::cout << "Warmup: " << warmup_iters << ", Iterations: " << bench_iters << std::endl;
+    std::cout << "FLOPs per forward: " << flops / 1e9 << " GFLOPs\n" << std::endl;
+
+    // Create HIP events for timing
+    hipEvent_t start_evt, stop_evt;
+    (void)hipEventCreate(&start_evt);
+    (void)hipEventCreate(&stop_evt);
+
+    std::vector<float> timing_results(solutions.size(), std::numeric_limits<float>::max());
+    for(std::size_t sol_idx = 0; sol_idx < solutions.size(); ++sol_idx)
+    {
+        auto&& solution = solutions[sol_idx];
+        std::cout << "Solution " << (sol_idx + 1) << "/" << solutions.size() << ": "
+                  << solution.ToTemplateString() << std::endl;
+
+        auto srcs = get_tile_headers_for_test();
+        srcs.push_back({"main.cpp", make_kernel_source(prob, solution, ref_params)});
+
+        rtc::compile_options options;
+        options.kernel_name = "f";
+        
+        try {
+        auto kernel         = rtc::compile_kernel(srcs, options);
+
+        auto [grid, block] = get_launch_dims(solution, prob);
+
+        rtc::buffer<half> o_host(o_size);
+        std::fill(o_host.begin(), o_host.end(), half(0.0f));
+        auto o_device = to_gpu(o_host);
+        auto q_device = to_gpu(q_host);
+        auto k_device = to_gpu(k_host);
+        auto v_device = to_gpu(v_host);
+
+        // Warmup
+        for(int i = 0; i < warmup_iters; ++i)
+        {
+            kernel.launch(nullptr, grid, block)(q_device.data(),
+                                                k_device.data(),
+                                                v_device.data(),
+                                                static_cast<half*>(nullptr),
+                                                o_device.data());
+        }
+        (void)hipDeviceSynchronize();
+
+        // Validate result after warmup
+        o_host = rtc::from_gpu(o_device);
+        std::vector<float> result(o_size);
+        std::transform(o_host.begin(), o_host.end(), result.begin(), [](half v) {
+            return static_cast<float>(v);
+        });
+        bool valid = allclose(o_ref, result, 0.0001, 0.0001);
+
+        // Benchmark
+        (void)hipEventRecord(start_evt, nullptr);
+        for(int i = 0; i < bench_iters; ++i)
+        {
+            kernel.launch(nullptr, grid, block)(q_device.data(),
+                                                k_device.data(),
+                                                v_device.data(),
+                                                static_cast<half*>(nullptr),
+                                                o_device.data());
+        }
+        (void)hipEventRecord(stop_evt, nullptr);
+        (void)hipEventSynchronize(stop_evt);
+
+        float total_ms = 0.0f;
+        (void)hipEventElapsedTime(&total_ms, start_evt, stop_evt);
+        float avg_ms   = total_ms / bench_iters;
+        if(valid) {
+            timing_results[sol_idx] =  avg_ms;
+        }
+        double tflops  = flops / (avg_ms * 1e-3) / 1e12;
+
+        std::cout << "  Time: " << avg_ms << " ms (avg over " << bench_iters << " iters)"
+                  << std::endl;
+        // std::cout << "  Throughput: " << tflops << " TFLOPs/s" << std::endl;
+        std::cout << "  Valid: " << (valid ? "yes" : "NO") << std::endl;
+        std::cout << std::endl;
+
+        CHECK(valid);
+        } catch (...) {
+            CHECK(false);
+            continue;
+        }
+    }
+    auto it = std::min_element(timing_results.begin(), timing_results.end());
+    std::size_t best_idx = std::distance(timing_results.begin(), it);
+    std::cout << "Best solution: " << *it << "ms, " << solutions[best_idx].ToTemplateString() << std::endl;
+
+    (void)hipEventDestroy(start_evt);
+    (void)hipEventDestroy(stop_evt);
 }
 
 int main(int argc, const char* argv[]) { test::run(argc, argv); }

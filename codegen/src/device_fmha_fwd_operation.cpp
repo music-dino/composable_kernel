@@ -26,11 +26,33 @@ static bool IsGfx12(const std::string& arch) { return arch.find("gfx12") == 0; }
 
 using TileMap = std::map<std::pair<std::size_t, std::size_t>, std::vector<TileConfig>>;
 
-// gfx9 fp16/bf16 tiles from KernelComponentFactoryGfx9::get_hdim_tile_size_dict
+// gfx9 fp16/bf16 tile configurations
+//
+// Constraints that must be satisfied:
+//   - rn0 = rk0 = rn1 = rk1 = 1 (only M-dimension warp distribution supported)
+//   - rm0 == rm1 (BlockGemm requires identical thread buffer sizes between GEMM0/GEMM1)
+//   - bk0max >= 2 * bk0 (k0_loops >= 2 required for correct pipelining)
+//   - bk0 >= wk0 (block K must be at least warp K; for fp16 min wk0 is 16)
+//   - bn1 = hdim_v (output head dimension processed per block)
+//   - bk1 = 32 (fixed for softmax/attention score reduction pipelining)
+//   - (wm0, wn0, wk0) and (wm1, wn1, wk1) must be valid MFMA sizes for the dtype
+//
+// Valid fp16 MFMA sizes: (32,32,16), (16,16,16), (16,16,32), (4,64,16), (64,4,16)
+// However, not all are usable in this kernel:
+//   - (64,4,16), (4,64,16): warp_gemm_dispatcher has no template specialization
+//   - (32,32,8): produces invalid results (likely internal kernel issue)
+//   - (16,16,32): requires bk0=32, only usable when bk0max >= 64 (larger hdim buckets)
+//
 // clang-format off
 static const TileMap gfx9_fp16_tiles = {
     //             bm0, bn0, bk0, bn1, bk1,bk0max,rm0,rn0,rk0,rm1,rn1,rk1, wm0,wn0,wk0, wm1,wn1,wk1
-    {{32, 32},   {{128,  64,  16,  32,  32,  32,   4,  1,  1,   4,  1,  1,  32, 32, 16,  32, 32, 16}}},
+    {{32, 32},   {{128,  64,  16,  32,  32,  32,   4,  1,  1,   4,  1,  1,  32, 32, 16,  32, 32, 16},
+                  { 64,  64,  16,  32,  32,  32,   4,  1,  1,   4,  1,  1,  16, 16, 16,  16, 16, 16},
+                  { 64,  64,  16,  32,  32,  32,   2,  1,  1,   2,  1,  1,  32, 32, 16,  32, 32, 16},
+                  { 32,  64,  16,  32,  32,  32,   2,  1,  1,   2,  1,  1,  16, 16, 16,  16, 16, 16},
+                  { 16,  32,  16,  32,  32,  32,   1,  1,  1,   1,  1,  1,  16, 16, 16,  16, 16, 16},
+                  {128,  64,  16,  32,  32,  32,   8,  1,  1,   8,  1,  1,  16, 16, 16,  16, 16, 16}}},
+    //
     {{64, 64},   {{ 16,  32,  64,  64,  32,  64,   1,  1,  1,   1,  1,  1,  16, 16, 32,  16, 16, 32},
                   { 32,  32,  64,  64,  32,  64,   1,  1,  1,   1,  1,  1,  32, 32, 16,  32, 32, 16},
                   {128,  64,  32,  64,  32,  64,   4,  1,  1,   4,  1,  1,  32, 32, 16,  32, 32, 16}}},
@@ -200,14 +222,17 @@ std::vector<Operation> Operation::CreateOperations(const Problem& prob, const st
                 }
                 else
                 {
-                    if(tile.bm0 != 128)
-                        continue;
+                    // if(tile.bm0 != 128)
+                    //     continue;
                 }
             }
 
             if(pipeline.name == "qr_async" || pipeline.name == "qr_async_trload")
             {
                 if(prob.dtype == DataType::Half && (prob.K % 8 != 0 || prob.O % 8 != 0))
+                    continue;
+                // Single-warp configs (rm0=1) produce incorrect results with async pipelines
+                if(tile.rm0 == 1)
                     continue;
             }
 
