@@ -880,8 +880,8 @@ TEST_CASE(benchmark_fmha_fwd)
     ck::host::device_fmha_fwd::Problem prob;
     prob.M             = 1024;  // seqlen_q
     prob.N             = 512; // seqlen_k
-    prob.K             = 128;   // hdim_q
-    prob.O             = 64;   // hdim_v
+    prob.K             = 256;   // hdim_q
+    prob.O             = 256;   // hdim_v
     prob.batch         = 2;
     prob.nhead         = 4;
     prob.dtype         = ck::host::DataType::Half;
