@@ -880,7 +880,7 @@ TEST_CASE(benchmark_fmha_fwd)
     ck::host::device_fmha_fwd::Problem prob;
     prob.M             = 1024;  // seqlen_q
     prob.N             = 512; // seqlen_k
-    prob.K             = 256;   // hdim_q
+    prob.K             = 128;   // hdim_q
     prob.O             = 256;   // hdim_v
     prob.batch         = 2;
     prob.nhead         = 4;
@@ -892,7 +892,7 @@ TEST_CASE(benchmark_fmha_fwd)
     const float scale_s = 1.0f / std::sqrt(static_cast<float>(prob.K));
 
     constexpr int warmup_iters = 1;
-    constexpr int bench_iters  = 1;
+    constexpr int bench_iters  = 1000;
 
     auto solutions = prob.GetSolutions("gfx90a");
     std::cout << "Number of solutions: " << solutions.size() << std::endl;
@@ -1022,6 +1022,7 @@ TEST_CASE(benchmark_fmha_fwd)
 
         CHECK(valid);
         } catch (...) {
+            std::cout << "COMPILE ERROR" << std::endl;
             CHECK(false);
             continue;
         }
@@ -1032,6 +1033,188 @@ TEST_CASE(benchmark_fmha_fwd)
 
     (void)hipEventDestroy(start_evt);
     (void)hipEventDestroy(stop_evt);
+}
+
+TEST_CASE(sweep_fmha_fwd)
+{
+    std::vector<std::size_t> seqlens_q{512, 1024, 2048, 4096};
+    std::vector<std::size_t> seqlens_k{512, 1024, 2048, 4096};
+    std::vector<std::size_t> hdims_q{32, 48, 64, 80, 96, 128, 192, 256};
+    std::vector<std::size_t> hdims_v{32, 48, 64, 80, 96, 128, 192, 256};
+
+    constexpr int batch_size = 2;
+    constexpr int num_heads  = 4;
+
+    int total_configs        = 0;
+    int total_solutions      = 0;
+    int total_passed         = 0;
+    int total_failed         = 0;
+    int total_compile_errors = 0;
+    int seed_counter         = 0;
+
+    struct FailureInfo
+    {
+        std::size_t M, N, K, O;
+        std::string solution;
+        std::string reason;
+    };
+    std::vector<FailureInfo> failures;
+
+    for(std::size_t M : seqlens_q)
+    {
+        for(std::size_t N : seqlens_k)
+        {
+            for(std::size_t K : hdims_q)
+            {
+                for(std::size_t O : hdims_v)
+                {
+                    total_configs++;
+
+                    ck::host::device_fmha_fwd::Problem prob;
+                    prob.M             = M;
+                    prob.N             = N;
+                    prob.K             = K;
+                    prob.O             = O;
+                    prob.batch         = batch_size;
+                    prob.nhead         = num_heads;
+                    prob.dtype         = ck::host::DataType::Half;
+                    prob.is_v_rowmajor = true;
+                    prob.is_causal     = false;
+                    prob.has_bias      = false;
+
+                    auto solutions = prob.GetSolutions("gfx90a");
+                    if(solutions.empty())
+                    {
+                        std::cout << "Config M=" << M << ", N=" << N << ", K=" << K << ", O=" << O
+                                  << ": No solutions available" << std::endl;
+                        continue;
+                    }
+
+                    std::cout << "\n=== Config M=" << M << ", N=" << N << ", K=" << K << ", O=" << O
+                              << " (" << solutions.size() << " solutions) ===" << std::endl;
+
+                    const float scale_s = 1.0f / std::sqrt(static_cast<float>(K));
+
+                    const std::size_t q_size = batch_size * num_heads * M * K;
+                    const std::size_t k_size = batch_size * num_heads * N * K;
+                    const std::size_t v_size = batch_size * num_heads * N * O;
+                    const std::size_t o_size = batch_size * num_heads * M * O;
+
+                    std::mt19937 rng(42 + seed_counter++);
+                    std::uniform_real_distribution<float> dist(-0.5f, 0.5f);
+
+                    rtc::buffer<half> q_host(q_size), k_host(k_size), v_host(v_size);
+                    std::vector<float> q_ref(q_size), k_ref(k_size), v_ref(v_size), o_ref(o_size);
+
+                    auto fill_buffers = [&](auto& host, auto& ref) {
+                        for(std::size_t i = 0; i < host.size(); ++i)
+                        {
+                            float val = dist(rng);
+                            host[i]   = half(val);
+                            ref[i]    = val;
+                        }
+                    };
+                    fill_buffers(q_host, q_ref);
+                    fill_buffers(k_host, k_ref);
+                    fill_buffers(v_host, v_ref);
+
+                    auto ref_params = make_ref_params(prob, scale_s);
+                    cpu_attention_ref(q_ref, k_ref, v_ref, o_ref, ref_params);
+
+                    auto q_device = to_gpu(q_host);
+                    auto k_device = to_gpu(k_host);
+                    auto v_device = to_gpu(v_host);
+
+                    for(std::size_t sol_idx = 0; sol_idx < solutions.size(); ++sol_idx)
+                    {
+                        total_solutions++;
+                        auto&& solution = solutions[sol_idx];
+                        std::string sol_str = solution.ToTemplateString();
+
+                        std::cout << "  [" << (sol_idx + 1) << "/" << solutions.size() << "] ";
+
+                        try
+                        {
+                            auto srcs = get_tile_headers_for_test();
+                            srcs.push_back({"main.cpp", make_kernel_source(prob, solution, ref_params)});
+
+                            rtc::compile_options options;
+                            options.kernel_name = "f";
+                            auto kernel         = rtc::compile_kernel(srcs, options);
+
+                            auto [grid, block] = get_launch_dims(solution, prob);
+
+                            rtc::buffer<half> o_host(o_size);
+                            std::fill(o_host.begin(), o_host.end(), half(0.0f));
+                            auto o_device = to_gpu(o_host);
+
+                            kernel.launch(nullptr, grid, block)(q_device.data(),
+                                                                k_device.data(),
+                                                                v_device.data(),
+                                                                static_cast<half*>(nullptr),
+                                                                o_device.data());
+                            (void)hipDeviceSynchronize();
+
+                            o_host = rtc::from_gpu(o_device);
+                            std::vector<float> result(o_size);
+                            std::transform(o_host.begin(), o_host.end(), result.begin(), [](half v) {
+                                return static_cast<float>(v);
+                            });
+
+                            bool valid = allclose(o_ref, result, 0.0001, 0.0001);
+                            if(valid)
+                            {
+                                std::cout << "PASS" << std::endl;
+                                total_passed++;
+                            }
+                            else
+                            {
+                                std::cout << "FAIL (incorrect result)" << std::endl;
+                                total_failed++;
+                                failures.push_back({M, N, K, O, sol_str, "incorrect result"});
+                            }
+                        }
+                        catch(const std::exception& e)
+                        {
+                            std::cout << "COMPILE ERROR: " << e.what() << std::endl;
+                            total_compile_errors++;
+                            failures.push_back({M, N, K, O, sol_str, std::string("compile error: ") + e.what()});
+                        }
+                        catch(...)
+                        {
+                            std::cout << "COMPILE ERROR (unknown)" << std::endl;
+                            total_compile_errors++;
+                            failures.push_back({M, N, K, O, sol_str, "compile error: unknown"});
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    std::cout << "\n========================================" << std::endl;
+    std::cout << "           SWEEP SUMMARY" << std::endl;
+    std::cout << "========================================" << std::endl;
+    std::cout << "Total configs tested: " << total_configs << std::endl;
+    std::cout << "Total solutions tested: " << total_solutions << std::endl;
+    std::cout << "Passed: " << total_passed << std::endl;
+    std::cout << "Failed (incorrect result): " << total_failed << std::endl;
+    std::cout << "Compile errors: " << total_compile_errors << std::endl;
+
+    if(!failures.empty())
+    {
+        std::cout << "\n========================================" << std::endl;
+        std::cout << "           FAILURES" << std::endl;
+        std::cout << "========================================" << std::endl;
+        for(const auto& f : failures)
+        {
+            std::cout << "M=" << f.M << ", N=" << f.N << ", K=" << f.K << ", O=" << f.O << std::endl;
+            std::cout << "  Solution: " << f.solution << std::endl;
+            std::cout << "  Reason: " << f.reason << std::endl;
+        }
+    }
+
+    EXPECT(total_failed == 0 && total_compile_errors == 0);
 }
 
 int main(int argc, const char* argv[]) { test::run(argc, argv); }

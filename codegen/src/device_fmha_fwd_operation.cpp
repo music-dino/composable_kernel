@@ -179,34 +179,25 @@ struct PipelineConfig
 
 static std::vector<PipelineConfig> GetPipelinesGfx12()
 {
-    return {
-        {"qr", false, false, false, false},
-        {"qr", true, true, true, true},
-    };
+    // QR pipeline is handled separately in CreateOperations with exact padding
+    return {};
 }
 
 static std::vector<PipelineConfig>
 GetPipelinesGfx9(std::size_t bucket_hdim, std::size_t bucket_hdim_v, bool has_bias)
 {
+    // QR pipeline is handled separately in CreateOperations with exact padding
     std::vector<PipelineConfig> configs;
 
-    if(bucket_hdim == 256 && bucket_hdim_v == 256)
+    // QR_ASYNC pipeline requires pad_m=true, pad_k=true, pad_o=true (enforced by static_assert
+    // in BlockFmhaPipelineQRKSVSAsync). Only pad_n is variable, giving us two variants.
+    if(!has_bias)
     {
-        configs.push_back({"qr", false, false, false, false});
-        configs.push_back({"qr", true, true, false, false});
-        configs.push_back({"qr", true, true, true, true});
+        configs.push_back({"qr_async", true, false, true, true});  // pad_n=false
+        configs.push_back({"qr_async", true, true, true, true});   // pad_n=true
     }
-    else if(has_bias)
-    {
-        configs.push_back({"qr", false, false, false, false});
-        configs.push_back({"qr", true, true, true, true});
-    }
-    else
-    {
-        configs.push_back({"qr_async", true, false, true, true});
-        configs.push_back({"qr_async", true, true, true, true});
-        configs.push_back({"qr", true, true, true, true});
-    }
+
+    // Note: qr_async_trload requires gfx950+ (uses buffer_load_dwordx3/x4 instructions)
 
     return configs;
 }
@@ -272,58 +263,75 @@ std::vector<Operation> Operation::CreateOperations(const Problem& prob, const st
 
     for(const auto& tile : bucket.tiles)
     {
+        // Compute exact padding needs for this tile
+        bool needs_pad_m = (prob.M % tile.bm0 != 0);
+        bool needs_pad_n = (prob.N % tile.bn0 != 0);
+        bool needs_pad_k = (prob.K != bucket.bucket_hdim);
+        bool needs_pad_o = (prob.O != bucket.bucket_hdim_v);
+
+        // QR pipeline: create one operation with exact padding
+        {
+            Operation op;
+            op.tile          = tile;
+            op.pipeline      = "qr";
+            op.is_causal     = prob.is_causal;
+            op.is_v_rowmajor = prob.is_v_rowmajor;
+            op.has_bias      = prob.has_bias;
+            op.dtype         = prob.dtype;
+            op.pad_m         = needs_pad_m;
+            op.pad_n         = needs_pad_n;
+            op.pad_k         = needs_pad_k;
+            op.pad_o         = needs_pad_o;
+            result.push_back(op);
+        }
+
+        // Async pipelines: use predefined configs with filters
         for(const auto& pipeline : pipelines)
         {
-            if(pipeline.name == "qr_async" || pipeline.name == "qr_async_trload")
+            if(prob.dtype == DataType::Half && (prob.K % 8 != 0 || prob.O % 8 != 0))
+                continue;
+            // Single-warp configs (rm0=1) produce incorrect results with async pipelines
+            if(tile.rm0 == 1)
+                continue;
+            // (96, 128) bucket: rm0 >= 4 with pad_n=false produces incorrect results
+            if(bucket.bucket_hdim == 96 && bucket.bucket_hdim_v == 128)
             {
-                if(prob.dtype == DataType::Half && (prob.K % 8 != 0 || prob.O % 8 != 0))
+                if(!pipeline.pad_n && tile.rm0 >= 4)
                     continue;
-                // Single-warp configs (rm0=1) produce incorrect results with async pipelines
-                if(tile.rm0 == 1)
+            }
+            // (128, 128) bucket filters for async pipelines:
+            //   - bn0=64, bk1=16 config produces invalid results
+            //   - bk0=64 configs (MFMA 16x16x32) produce invalid results
+            if(bucket.bucket_hdim == 128 && bucket.bucket_hdim_v == 128)
+            {
+                if(tile.bn0 == 64 && tile.bk1 == 16)
                     continue;
-                // (96, 128) bucket: rm0 >= 4 with pad_n=false produces incorrect results
-                if(bucket.bucket_hdim == 96 && bucket.bucket_hdim_v == 128)
+                if(tile.bk0 == 64)
+                    continue;
+            }
+            // (192, 128) bucket filters for async pipelines
+            if(bucket.bucket_hdim == 192 && bucket.bucket_hdim_v == 128)
+            {
+                // bk0=64 configs produce invalid results
+                if(tile.bk0 == 64)
+                    continue;
+                // pad_n=false fails for wm0=32 (MFMA 32x32x16) or rm0>=4
+                if(!pipeline.pad_n && (tile.wm0 == 32 || tile.rm0 >= 4))
+                    continue;
+            }
+            // (192, 192) bucket filters for async pipelines
+            if(bucket.bucket_hdim == 192 && bucket.bucket_hdim_v == 192)
+            {
+                // rm0=8 with wm0=32 always fails (even with pad_n=true)
+                if(tile.rm0 == 8 && tile.wm0 == 32)
+                    continue;
+                // pad_n=false fails except for (rm0=2, wm0=32) and (rm0=8, wk0=16)
+                if(!pipeline.pad_n)
                 {
-                    if(!pipeline.pad_n && tile.rm0 >= 4)
+                    bool is_valid = (tile.rm0 == 2 && tile.wm0 == 32) ||
+                                    (tile.rm0 == 8 && tile.wk0 == 16);
+                    if(!is_valid)
                         continue;
-                }
-                // (128, 128) bucket filters for async pipelines:
-                //   - bn0=64, bk1=16 config produces invalid results
-                //   - bk0=64 configs (MFMA 16x16x32) produce invalid results
-                if(bucket.bucket_hdim == 128 && bucket.bucket_hdim_v == 128)
-                {
-                    if(tile.bn0 == 64 && tile.bk1 == 16)
-                        continue;
-                    if(tile.bk0 == 64)
-                        continue;
-                }
-                // (192, 128) bucket filters for async pipelines
-                if(bucket.bucket_hdim == 192 && bucket.bucket_hdim_v == 128)
-                {
-                    // bk0=64 configs produce invalid results
-                    if(tile.bk0 == 64)
-                        continue;
-                    // pad_n=false fails for wm0=32 (MFMA 32x32x16) or rm0>=4
-                    if(!pipeline.pad_n && (tile.wm0 == 32 || tile.rm0 >= 4))
-                        continue;
-                    // Alternative: skip all pad_n=false for this bucket (more conservative)
-                    // if(!pipeline.pad_n)
-                    //     continue;
-                }
-                // (192, 192) bucket filters for async pipelines
-                if(bucket.bucket_hdim == 192 && bucket.bucket_hdim_v == 192)
-                {
-                    // rm0=8 with wm0=32 always fails (even with pad_n=true)
-                    if(tile.rm0 == 8 && tile.wm0 == 32)
-                        continue;
-                    // pad_n=false fails except for (rm0=2, wm0=32) and (rm0=8, wk0=16)
-                    if(!pipeline.pad_n)
-                    {
-                        bool is_valid = (tile.rm0 == 2 && tile.wm0 == 32) ||
-                                        (tile.rm0 == 8 && tile.wk0 == 16);
-                        if(!is_valid)
-                            continue;
-                    }
                 }
             }
 
@@ -331,8 +339,7 @@ std::vector<Operation> Operation::CreateOperations(const Problem& prob, const st
                 continue;
 
             Operation op;
-            op.tile = tile;
-
+            op.tile          = tile;
             op.pipeline      = pipeline.name;
             op.is_causal     = prob.is_causal;
             op.is_v_rowmajor = prob.is_v_rowmajor;
@@ -342,7 +349,6 @@ std::vector<Operation> Operation::CreateOperations(const Problem& prob, const st
             op.pad_n         = pipeline.pad_n;
             op.pad_k         = pipeline.pad_k;
             op.pad_o         = pipeline.pad_o;
-
             result.push_back(op);
         }
     }
