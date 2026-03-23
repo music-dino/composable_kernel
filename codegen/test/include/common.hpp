@@ -36,15 +36,17 @@ inline const std::vector<rtc::src_file>& get_headers_for_test()
 
 inline std::vector<rtc::src_file> create_tile_headers_for_test()
 {
-    auto headers = ck::host::GetTileHeaders();
+    auto headers = ck::host::GetTileHeadersForRTC();
     std::vector<rtc::src_file> result;
-    std::transform(headers.begin(), headers.end(), std::back_inserter(result), [](auto& p) {
-        std::string content;
-        content.reserve(p.second.size() + 1);
-        content.push_back(' '); // We need a whitespace before the content for hipRTC to work
-        content.append(p.second.data(), p.second.size());
-        return rtc::src_file{p.first, std::move(content)};
-    });
+    result.reserve(headers.size());
+    for(auto& [name, content] : headers)
+    {
+        std::string padded;
+        padded.reserve(content.size() + 1);
+        padded.push_back(' '); // We need a whitespace before the content for hipRTC to work
+        padded.append(content);
+        result.push_back(rtc::src_file{name, std::move(padded)});
+    }
     return result;
 }
 

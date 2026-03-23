@@ -24,6 +24,32 @@ using ck::host::device_fmha_fwd::Problem;
 using half = _Float16;
 
 const std::string kernel_template = R"__ck__(
+#include <cmath>
+#include <cstdint>
+#include <cassert>
+#include <sstream>
+namespace std {
+using ::abs; using ::fabsf; using ::fabs;
+using ::tanhf; using ::tanh;
+using ::acosf; using ::acos; using ::acoshf; using ::acosh;
+using ::asinf; using ::asin; using ::asinhf; using ::asinh;
+using ::atanf; using ::atan; using ::atanhf; using ::atanh;
+using ::sinf; using ::sin; using ::sinhf; using ::sinh;
+using ::cosf; using ::cos; using ::coshf; using ::cosh;
+using ::tanf; using ::tan;
+using ::ceilf; using ::ceil;
+using ::floorf; using ::floor;
+using ::expf; using ::exp; using ::exp2f;
+using ::logf; using ::log;
+using ::powf; using ::pow;
+using ::expm1f; using ::expm1;
+using ::sqrtf; using ::sqrt;
+using ::isnan; using ::isinf; using ::isfinite;
+using ::int8_t; using ::uint8_t;
+using ::int16_t; using ::uint16_t;
+using ::int32_t; using ::uint32_t;
+using ::int64_t; using ::uint64_t;
+}
 #include <${include}>
 
 using KernelType = ${template};
@@ -677,10 +703,12 @@ TEST_CASE(test_fmha_fwd_large_dimensions)
         std::cout << "Testing solution " << (sol_idx + 1) << "/" << solutions.size() << std::endl;
 
         auto srcs = get_tile_headers_for_test();
+        // srcs.clear();
         srcs.push_back({"main.cpp", make_kernel_source(prob, solution, ref_params)});
 
         rtc::compile_options options;
         options.kernel_name = "f";
+        // options.flags += " -D__HIPCC__";
         auto kernel         = rtc::compile_kernel(srcs, options);
 
         auto [grid, block] = get_launch_dims(solution, prob);

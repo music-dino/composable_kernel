@@ -1,0 +1,13 @@
+#pragma once
+#include <rocm/stddef.hpp>
+
+using __hip_internal::size_t;
+using __hip_internal::ptrdiff_t;
+using __hip_internal::nullptr_t;
+
+namespace std {
+using namespace rocm;
+using __hip_internal::size_t;
+using __hip_internal::ptrdiff_t;
+using __hip_internal::nullptr_t;
+} // namespace std

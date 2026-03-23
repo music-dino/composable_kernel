@@ -1,0 +1,70 @@
+#pragma once
+
+namespace std {
+
+using ::abs;
+using ::fabs;
+using ::fabsf;
+
+using ::sqrt;
+using ::sqrtf;
+
+using ::sin;
+using ::sinf;
+using ::cos;
+using ::cosf;
+using ::tan;
+using ::tanf;
+
+using ::asin;
+using ::asinf;
+using ::acos;
+using ::acosf;
+using ::atan;
+using ::atanf;
+
+using ::sinh;
+using ::sinhf;
+using ::cosh;
+using ::coshf;
+using ::tanh;
+using ::tanhf;
+
+using ::exp;
+using ::expf;
+using ::exp2;
+using ::exp2f;
+using ::expm1;
+using ::expm1f;
+
+using ::log;
+using ::logf;
+using ::log2;
+using ::log2f;
+
+using ::pow;
+using ::powf;
+
+using ::ceil;
+using ::ceilf;
+using ::floor;
+using ::floorf;
+using ::round;
+using ::roundf;
+using ::trunc;
+using ::truncf;
+
+using ::fma;
+using ::fmaf;
+using ::fmin;
+using ::fminf;
+using ::fmax;
+using ::fmaxf;
+using ::copysign;
+using ::copysignf;
+
+using ::isnan;
+using ::isinf;
+using ::isfinite;
+
+} // namespace std
