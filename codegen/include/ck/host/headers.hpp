@@ -17,7 +17,5 @@ std::unordered_map<std::string_view, std::string_view> GetTileHeaders();
 
 std::unordered_map<std::string, std::string> GetTileHeadersForRTC();
 
-std::string strip_host_bodies(const std::string& content);
-
 } // namespace host
 } // namespace ck
