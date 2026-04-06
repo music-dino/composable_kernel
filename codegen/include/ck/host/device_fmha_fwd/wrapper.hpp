@@ -124,17 +124,20 @@ struct FmhaFwdWrapper
 
     // Innermost dimension is always contiguous (stride=1):
     //
-    // K is stored as [batch, nhead, N, K] (not transposed).
+    // K is stored as [batch, nhead_k, N, K] (not transposed).
     // The kernel internally handles the transpose for Q @ K^T.
     //
+    // For MQA/GQA: nhead_k <= nhead, nhead must be divisible by nhead_k
+    // nhead_ratio_qk = nhead / nhead_k determines how many Q heads share a K/V head
+    //
     // Q: [batch, nhead, M, K]
-    // K: [batch, nhead, N, K]
-    // V: [batch, nhead, N, O] (rowmajor) or [batch, nhead, O, N] (colmajor)
+    // K: [batch, nhead_k, N, K]
+    // V: [batch, nhead_k, N, O] (rowmajor) or [batch, nhead_k, O, N] (colmajor)
     // O: [batch, nhead, M, O]
     // Bias: [batch, nhead, M, N]
     struct Descriptor
     {
-        index_t batch, nhead, M, K;
+        index_t batch, nhead, nhead_k, M, K;
         index_t q_stride_batch, q_stride_nhead, q_stride_m;
 
         index_t N;
@@ -175,6 +178,7 @@ struct FmhaFwdWrapper
     {
         return Descriptor{q_dims[number<0>{}],
                           q_dims[number<1>{}],
+                          k_dims[number<1>{}], // nhead_k from K tensor
                           q_dims[number<2>{}],
                           q_dims[number<3>{}],
                           q_strides[number<0>{}],
@@ -223,7 +227,7 @@ struct FmhaFwdWrapper
         kargs.hdim_v   = desc.O;
 
         kargs.num_head_q     = desc.nhead;
-        kargs.nhead_ratio_qk = 1; // nhead_q == nhead_k
+        kargs.nhead_ratio_qk = desc.nhead / desc.nhead_k;
 
         kargs.scale_s = scale_s;
 

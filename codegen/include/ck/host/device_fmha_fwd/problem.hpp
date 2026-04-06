@@ -19,8 +19,9 @@ struct Problem
     std::size_t K = 0; // hdim_q
     std::size_t O = 0; // hdim_v
 
-    std::size_t batch = 0;
-    std::size_t nhead = 0; // nhead_q == nhead_k
+    std::size_t batch   = 0;
+    std::size_t nhead   = 0; // nhead_q (number of Q heads)
+    std::size_t nhead_k = 0; // nhead_k (number of K/V heads, nhead_k <= nhead, must divide evenly)
 
     DataType dtype = DataType::Half;
 

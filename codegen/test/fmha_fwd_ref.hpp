@@ -15,11 +15,12 @@ namespace device_fmha_fwd {
 struct FmhaFwdRefParams
 {
     std::size_t batch;
-    std::size_t nhead;
-    std::size_t M; // seqlen_q
-    std::size_t N; // seqlen_k
-    std::size_t K; // hdim_q
-    std::size_t O; // hdim_v
+    std::size_t nhead;   // nhead_q (number of Q heads)
+    std::size_t nhead_k; // nhead_k (number of K/V heads, nhead_k <= nhead)
+    std::size_t M;       // seqlen_q
+    std::size_t N;       // seqlen_k
+    std::size_t K;       // hdim_q
+    std::size_t O;       // hdim_v
 
     float scale_s;
 
@@ -46,6 +47,7 @@ struct FmhaFwdRefParams
 
 // O = softmax(Q @ K^T * scale_s + bias) @ V
 // bias is optional (nullptr = no bias)
+// Supports MQA/GQA: nhead_k <= nhead, groups of Q heads share K/V heads
 inline void cpu_attention_ref(const std::vector<float>& q,
                               const std::vector<float>& k,
                               const std::vector<float>& v,
@@ -53,13 +55,17 @@ inline void cpu_attention_ref(const std::vector<float>& q,
                               const std::vector<float>* bias,
                               const FmhaFwdRefParams& p)
 {
+    const std::size_t nhead_ratio = p.nhead / p.nhead_k;
+
     for(std::size_t b = 0; b < p.batch; ++b)
     {
         for(std::size_t h = 0; h < p.nhead; ++h)
         {
+            const std::size_t h_kv = h / nhead_ratio;
+
             const float* q_ptr = q.data() + b * p.q_stride_batch + h * p.q_stride_nhead;
-            const float* k_ptr = k.data() + b * p.k_stride_batch + h * p.k_stride_nhead;
-            const float* v_ptr = v.data() + b * p.v_stride_batch + h * p.v_stride_nhead;
+            const float* k_ptr = k.data() + b * p.k_stride_batch + h_kv * p.k_stride_nhead;
+            const float* v_ptr = v.data() + b * p.v_stride_batch + h_kv * p.v_stride_nhead;
             const float* bias_ptr =
                 bias ? (bias->data() + b * p.bias_stride_batch + h * p.bias_stride_nhead) : nullptr;
             float* o_ptr = o.data() + b * p.o_stride_batch + h * p.o_stride_nhead;

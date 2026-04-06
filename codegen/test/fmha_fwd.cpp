@@ -40,19 +40,19 @@ __global__ void f(const ${dtype}* q, const ${dtype}* k, const ${dtype}* v, const
     using Kernel = KernelType;
     
     constexpr auto desc = Kernel::make_descriptor(
-        // Q
+        // Q: [batch, nhead, M, K]
         ck_tile::make_tuple(${batch}, ${nhead}, ${m}, ${k}),
         ck_tile::make_tuple(${q_stride_batch}, ${q_stride_nhead}, ${q_stride_m}),
-        // K
-        ck_tile::make_tuple(${batch}, ${nhead}, ${n}, ${k}),
+        // K: [batch, nhead_k, N, K]
+        ck_tile::make_tuple(${batch}, ${nhead_k}, ${n}, ${k}),
         ck_tile::make_tuple(${k_stride_batch}, ${k_stride_nhead}, ${k_stride_n}),
-        // V
-        ck_tile::make_tuple(${batch}, ${nhead}, ${n}, ${o}),
+        // V: [batch, nhead_k, N, O]
+        ck_tile::make_tuple(${batch}, ${nhead_k}, ${n}, ${o}),
         ck_tile::make_tuple(${v_stride_batch}, ${v_stride_nhead}, ${v_stride_n}),
-        // O
+        // O: [batch, nhead, M, O]
         ck_tile::make_tuple(${batch}, ${nhead}, ${m}, ${o}),
         ck_tile::make_tuple(${o_stride_batch}, ${o_stride_nhead}, ${o_stride_m}),
-        // Bias
+        // Bias: [batch, nhead, M, N]
         ck_tile::make_tuple(${batch}, ${nhead}, ${m}, ${n}),
         ck_tile::make_tuple(${bias_stride_batch}, ${bias_stride_nhead}, ${bias_stride_m}));
     
@@ -76,6 +76,7 @@ std::string make_kernel_source(const Problem& prob,
          {"dtype", "ck_tile::fp16_t"},
          {"batch", std::to_string(ref_params.batch)},
          {"nhead", std::to_string(ref_params.nhead)},
+         {"nhead_k", std::to_string(ref_params.nhead_k)},
          {"m", std::to_string(ref_params.M)},
          {"n", std::to_string(ref_params.N)},
          {"k", std::to_string(ref_params.K)},
@@ -103,6 +104,7 @@ FmhaFwdRefParams make_ref_params(const Problem& prob, float scale_s)
     FmhaFwdRefParams p;
     p.batch   = prob.batch;
     p.nhead   = prob.nhead;
+    p.nhead_k = prob.nhead_k;
     p.M       = prob.M;
     p.N       = prob.N;
     p.K       = prob.K;
@@ -114,15 +116,15 @@ FmhaFwdRefParams make_ref_params(const Problem& prob, float scale_s)
     p.q_stride_nhead = prob.M * prob.K;
     p.q_stride_batch = prob.nhead * prob.M * prob.K;
 
-    // K - [batch, nhead, N, K]
+    // K - [batch, nhead_k, N, K]
     p.k_stride_n     = prob.K;
     p.k_stride_nhead = prob.N * prob.K;
-    p.k_stride_batch = prob.nhead * prob.N * prob.K;
+    p.k_stride_batch = prob.nhead_k * prob.N * prob.K;
 
-    // V - [batch, nhead, N, O]
+    // V - [batch, nhead_k, N, O]
     p.v_stride_n     = prob.O;
     p.v_stride_nhead = prob.N * prob.O;
-    p.v_stride_batch = prob.nhead * prob.N * prob.O;
+    p.v_stride_batch = prob.nhead_k * prob.N * prob.O;
 
     // O - [batch, nhead, M, O] contiguous
     p.o_stride_m     = prob.O;
@@ -171,6 +173,7 @@ TEST_CASE(test_fmha_fwd_simple_validation)
     prob.O             = 16; // hdim_v
     prob.batch         = 2;
     prob.nhead         = 1;
+    prob.nhead_k       = 1;
     prob.dtype         = ck::host::DataType::Half;
     prob.is_v_rowmajor = true;
     prob.is_causal     = false;
@@ -638,6 +641,7 @@ TEST_CASE(test_fmha_fwd_large_dimensions)
     prob.O             = 64;  // hdim_v
     prob.batch         = 4;
     prob.nhead         = 8;
+    prob.nhead_k       = 8;
     prob.dtype         = ck::host::DataType::Half;
     prob.is_v_rowmajor = true;
     prob.is_causal     = false;
@@ -651,8 +655,8 @@ TEST_CASE(test_fmha_fwd_large_dimensions)
     EXPECT(!solutions.empty());
 
     const std::size_t q_size = prob.batch * prob.nhead * prob.M * prob.K;
-    const std::size_t k_size = prob.batch * prob.nhead * prob.N * prob.K;
-    const std::size_t v_size = prob.batch * prob.nhead * prob.N * prob.O;
+    const std::size_t k_size = prob.batch * prob.nhead_k * prob.N * prob.K;
+    const std::size_t v_size = prob.batch * prob.nhead_k * prob.N * prob.O;
     const std::size_t o_size = prob.batch * prob.nhead * prob.M * prob.O;
 
     std::mt19937 rng(42);
@@ -722,6 +726,7 @@ TEST_CASE(test_fmha_fwd_512x512_hdim32)
     prob.O             = 32;  // hdim_v
     prob.batch         = 2;
     prob.nhead         = 4;
+    prob.nhead_k       = 4;
     prob.dtype         = ck::host::DataType::Half;
     prob.is_v_rowmajor = true;
     prob.is_causal     = false;
@@ -735,8 +740,8 @@ TEST_CASE(test_fmha_fwd_512x512_hdim32)
     EXPECT(!solutions.empty());
 
     const std::size_t q_size = prob.batch * prob.nhead * prob.M * prob.K;
-    const std::size_t k_size = prob.batch * prob.nhead * prob.N * prob.K;
-    const std::size_t v_size = prob.batch * prob.nhead * prob.N * prob.O;
+    const std::size_t k_size = prob.batch * prob.nhead_k * prob.N * prob.K;
+    const std::size_t v_size = prob.batch * prob.nhead_k * prob.N * prob.O;
     const std::size_t o_size = prob.batch * prob.nhead * prob.M * prob.O;
 
     std::mt19937 rng(44);
@@ -804,6 +809,7 @@ TEST_CASE(test_fmha_fwd_with_bias)
     prob.O             = 32;  // hdim_v
     prob.batch         = 2;
     prob.nhead         = 4;
+    prob.nhead_k       = 4;
     prob.dtype         = ck::host::DataType::Half;
     prob.is_v_rowmajor = true;
     prob.is_causal     = false;
@@ -817,8 +823,8 @@ TEST_CASE(test_fmha_fwd_with_bias)
     EXPECT(!solutions.empty());
 
     const std::size_t q_size    = prob.batch * prob.nhead * prob.M * prob.K;
-    const std::size_t k_size    = prob.batch * prob.nhead * prob.N * prob.K;
-    const std::size_t v_size    = prob.batch * prob.nhead * prob.N * prob.O;
+    const std::size_t k_size    = prob.batch * prob.nhead_k * prob.N * prob.K;
+    const std::size_t v_size    = prob.batch * prob.nhead_k * prob.N * prob.O;
     const std::size_t o_size    = prob.batch * prob.nhead * prob.M * prob.O;
     const std::size_t bias_size = prob.M * prob.N; // Only [M, N], broadcast across batch/nhead
 
@@ -881,16 +887,101 @@ TEST_CASE(test_fmha_fwd_with_bias)
     }
 }
 
+TEST_CASE(test_fmha_fwd_multihead)
+{
+    // Multi-head test: 8 Q heads, 2 K/V heads (4:1 ratio)
+    ck::host::device_fmha_fwd::Problem prob;
+    prob.M             = 128; // seqlen_q
+    prob.N             = 256; // seqlen_k
+    prob.K             = 64;  // hdim_q
+    prob.O             = 64;  // hdim_v
+    prob.batch         = 2;
+    prob.nhead         = 8;
+    prob.nhead_k       = 2;   // GQA: 8 Q heads share 2 K/V heads (ratio = 4)
+    prob.dtype         = ck::host::DataType::Half;
+    prob.is_v_rowmajor = true;
+    prob.is_causal     = false;
+    prob.has_bias      = false;
+
+    const float scale_s = 1.0f / std::sqrt(static_cast<float>(prob.K));
+
+    auto solutions = prob.GetSolutions("gfx90a");
+    std::cout << "Multi-head Test - Number of solutions: " << solutions.size() << std::endl;
+
+    EXPECT(!solutions.empty());
+
+    const std::size_t q_size = prob.batch * prob.nhead * prob.M * prob.K;
+    const std::size_t k_size = prob.batch * prob.nhead_k * prob.N * prob.K;
+    const std::size_t v_size = prob.batch * prob.nhead_k * prob.N * prob.O;
+    const std::size_t o_size = prob.batch * prob.nhead * prob.M * prob.O;
+
+    std::mt19937 rng(45);
+    std::uniform_real_distribution<float> dist(-0.5f, 0.5f);
+
+    rtc::buffer<half> q_host(q_size), k_host(k_size), v_host(v_size);
+    std::vector<float> q_ref(q_size), k_ref(k_size), v_ref(v_size), o_ref(o_size);
+
+    auto fill_buffers = [&](auto& host, auto& ref) {
+        for(std::size_t i = 0; i < host.size(); ++i)
+        {
+            float val = dist(rng);
+            host[i]   = half(val);
+            ref[i]    = val;
+        }
+    };
+    fill_buffers(q_host, q_ref);
+    fill_buffers(k_host, k_ref);
+    fill_buffers(v_host, v_ref);
+
+    auto ref_params = make_ref_params(prob, scale_s);
+    cpu_attention_ref(q_ref, k_ref, v_ref, o_ref, ref_params);
+
+    for(std::size_t sol_idx = 0; sol_idx < solutions.size(); ++sol_idx)
+    {
+        auto&& solution = solutions[sol_idx];
+        std::cout << "Multi-head Solution " << (sol_idx + 1) << "/" << solutions.size() << std::endl;
+
+        auto srcs = get_tile_headers_for_test();
+        srcs.push_back({"main.cpp", make_kernel_source(prob, solution, ref_params)});
+
+        rtc::compile_options options;
+        options.kernel_name = "f";
+        auto kernel         = rtc::compile_kernel(srcs, options);
+
+        auto [grid, block] = get_launch_dims(solution, prob);
+
+        rtc::buffer<half> o_host(o_size);
+        std::fill(o_host.begin(), o_host.end(), half(0.0f));
+        auto o_device = to_gpu(o_host);
+        auto q_device = to_gpu(q_host);
+        auto k_device = to_gpu(k_host);
+        auto v_device = to_gpu(v_host);
+        kernel.launch(nullptr, grid, block)(q_device.data(),
+                                            k_device.data(),
+                                            v_device.data(),
+                                            static_cast<half*>(nullptr),
+                                            o_device.data());
+        o_host = rtc::from_gpu(o_device);
+        std::vector<float> result(o_size);
+        std::transform(o_host.begin(), o_host.end(), result.begin(), [](half v) {
+            return static_cast<float>(v);
+        });
+
+        CHECK(allclose(o_ref, result, 0.0001, 0.0001));
+    }
+}
+
 TEST_CASE(benchmark_fmha_fwd)
 {
     // Benchmark configuration - matches common example settings
     ck::host::device_fmha_fwd::Problem prob;
     prob.M             = 1024;  // seqlen_q
-    prob.N             = 512; // seqlen_k
+    prob.N             = 512;   // seqlen_k
     prob.K             = 128;   // hdim_q
     prob.O             = 256;   // hdim_v
     prob.batch         = 2;
     prob.nhead         = 4;
+    prob.nhead_k       = 4;
     prob.dtype         = ck::host::DataType::Half;
     prob.is_v_rowmajor = true;
     prob.is_causal     = false;
@@ -907,8 +998,8 @@ TEST_CASE(benchmark_fmha_fwd)
     EXPECT(!solutions.empty());
 
     const std::size_t q_size = prob.batch * prob.nhead * prob.M * prob.K;
-    const std::size_t k_size = prob.batch * prob.nhead * prob.N * prob.K;
-    const std::size_t v_size = prob.batch * prob.nhead * prob.N * prob.O;
+    const std::size_t k_size = prob.batch * prob.nhead_k * prob.N * prob.K;
+    const std::size_t v_size = prob.batch * prob.nhead_k * prob.N * prob.O;
     const std::size_t o_size = prob.batch * prob.nhead * prob.M * prob.O;
 
     // Initialize with random data and create reference buffers
@@ -1084,6 +1175,7 @@ TEST_CASE(sweep_fmha_fwd)
                     prob.O             = O;
                     prob.batch         = batch_size;
                     prob.nhead         = num_heads;
+                    prob.nhead_k       = num_heads;
                     prob.dtype         = ck::host::DataType::Half;
                     prob.is_v_rowmajor = true;
                     prob.is_causal     = false;
@@ -1103,8 +1195,8 @@ TEST_CASE(sweep_fmha_fwd)
                     const float scale_s = 1.0f / std::sqrt(static_cast<float>(K));
 
                     const std::size_t q_size = batch_size * num_heads * M * K;
-                    const std::size_t k_size = batch_size * num_heads * N * K;
-                    const std::size_t v_size = batch_size * num_heads * N * O;
+                    const std::size_t k_size = batch_size * prob.nhead_k * N * K;
+                    const std::size_t v_size = batch_size * prob.nhead_k * N * O;
                     const std::size_t o_size = batch_size * num_heads * M * O;
 
                     std::mt19937 rng(42 + seed_counter++);
