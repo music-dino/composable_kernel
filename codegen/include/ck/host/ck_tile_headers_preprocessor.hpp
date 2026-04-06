@@ -4,6 +4,7 @@
 #pragma once
 
 #include <string>
+#include <string_view>
 
 namespace ck {
 namespace host {
@@ -16,7 +17,7 @@ namespace host {
 // For non-constexpr functions:  { __builtin_unreachable(); }
 // For constexpr functions:      { return {}; }
 // For constexpr auto functions: { return 0; }
-std::string strip_host_bodies(const std::string& content);
+std::string strip_host_bodies(std::string_view content);
 
 } // namespace host
 } // namespace ck

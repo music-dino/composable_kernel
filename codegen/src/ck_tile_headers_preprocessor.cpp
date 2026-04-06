@@ -81,7 +81,7 @@ tokenize(const char* start, const char* end, const std::vector<tagged_lexer>& le
     return tokens;
 }
 
-static std::vector<token> cpp_tokenize(const std::string& s)
+static std::vector<token> cpp_tokenize(std::string_view s)
 {
     std::vector<tagged_lexer> lexers;
 
@@ -257,7 +257,7 @@ static std::string_view choose_replacement(bool is_constexpr, bool is_auto)
 // Public API
 // ---------------------------------------------------------------------------
 
-std::string strip_host_bodies(const std::string& content)
+std::string strip_host_bodies(std::string_view content)
 {
     auto tokens = cpp_tokenize(content);
 

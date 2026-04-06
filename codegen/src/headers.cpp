@@ -40,11 +40,11 @@ std::unordered_map<std::string, std::string> GetTileHeadersForRTC()
 
     for(auto& [name, content] : tile_hdrs)
     {
-        result.emplace(std::string(name), strip_host_bodies(std::string(content)));
+        result.emplace(std::string(name), strip_host_bodies(content));
     }
 
     for(auto& [name, content] : codegen_hdrs)
-        result.emplace(std::string(name), strip_host_bodies(std::string(content)));
+        result.emplace(std::string(name), strip_host_bodies(content));
 
     return result;
 }

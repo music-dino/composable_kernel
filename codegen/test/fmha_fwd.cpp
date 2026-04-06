@@ -28,28 +28,6 @@ const std::string kernel_template = R"__ck__(
 #include <cstdint>
 #include <cassert>
 #include <sstream>
-namespace std {
-using ::abs; using ::fabsf; using ::fabs;
-using ::tanhf; using ::tanh;
-using ::acosf; using ::acos; using ::acoshf; using ::acosh;
-using ::asinf; using ::asin; using ::asinhf; using ::asinh;
-using ::atanf; using ::atan; using ::atanhf; using ::atanh;
-using ::sinf; using ::sin; using ::sinhf; using ::sinh;
-using ::cosf; using ::cos; using ::coshf; using ::cosh;
-using ::tanf; using ::tan;
-using ::ceilf; using ::ceil;
-using ::floorf; using ::floor;
-using ::expf; using ::exp; using ::exp2f;
-using ::logf; using ::log;
-using ::powf; using ::pow;
-using ::expm1f; using ::expm1;
-using ::sqrtf; using ::sqrt;
-using ::isnan; using ::isinf; using ::isfinite;
-using ::int8_t; using ::uint8_t;
-using ::int16_t; using ::uint16_t;
-using ::int32_t; using ::uint32_t;
-using ::int64_t; using ::uint64_t;
-}
 #include <${include}>
 
 using KernelType = ${template};
@@ -89,6 +67,7 @@ std::string make_kernel_source(const Problem& prob,
                                const FmhaFwdRefParams& ref_params)
 {
     auto template_string = solution.ToTemplateString();
+    std::cout << template_string << std::endl;
     //std::cout << template_string << std::endl;
     return ck::host::InterpolateString(
         kernel_template,
