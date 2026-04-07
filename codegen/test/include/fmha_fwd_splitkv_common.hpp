@@ -130,7 +130,10 @@ inline SplitKVParams make_splitkv_params(const device_fmha_splitkv::Problem& pro
     return p;
 }
 
-// Grid: (ceil(M/BM0) * ceil(O/BN1) * num_splits, nhead, batch)
+// Grid: (ceil(M_eff/BM0) * ceil(O/BN1) * num_splits, nhead_eff, batch)
+// When kMergeNumHeadGroupsSeqLenQ is true:
+//   - nhead_eff = nhead_k
+//   - M_eff = M * (nhead / nhead_k)
 // Block: (num_warps * warp_size)
 inline std::pair<dim3, dim3>
 get_splitkv_launch_dims(const ck::host::Solution& solution,
@@ -145,14 +148,21 @@ get_splitkv_launch_dims(const ck::host::Solution& solution,
     auto rn1 = solution.GetTemplateParameter<std::size_t>("RN1");
     auto rk1 = solution.GetTemplateParameter<std::size_t>("RK1");
 
+    bool merge_heads = solution.GetTemplateParameter<std::string>("MergeNumHeadGroupsSeqLenQ") == "true";
+
     const std::size_t warp_size  = 64;
     const std::size_t num_warps  = std::max(rm0 * rn0 * rk0, rm1 * rn1 * rk1);
     const std::size_t block_size = num_warps * warp_size;
 
-    const auto grid_m = integer_divide_ceil(prob.M, bm0);
+    // When kMergeNumHeadGroupsSeqLenQ is true, the kernel merges head groups with seqlen_q
+    const std::size_t nhead_ratio = prob.nhead / prob.nhead_k;
+    const std::size_t M_eff       = merge_heads ? prob.M * nhead_ratio : prob.M;
+    const std::size_t nhead_eff   = merge_heads ? prob.nhead_k : prob.nhead;
+
+    const auto grid_m = integer_divide_ceil(M_eff, bm0);
     const auto grid_n = integer_divide_ceil(prob.O, bn1);
 
-    dim3 grid(grid_m * grid_n * prob.num_splits, prob.nhead, prob.batch);
+    dim3 grid(grid_m * grid_n * prob.num_splits, nhead_eff, prob.batch);
     dim3 block(block_size, 1, 1);
 
     return {grid, block};

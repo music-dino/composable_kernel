@@ -32,6 +32,10 @@ struct Operation
 
     bool has_uneven_splits = true; // whether splits may be uneven
 
+    // Optimization for GQA decode: merge head groups with seqlen_q
+    // Only applies when hdim=128, seqlen_q=1, nhead_k < nhead_q
+    bool merge_num_head_groups_seqlen_q = false;
+
     static std::vector<Operation> CreateOperations(const Problem& prob, const std::string& arch);
 
     Solution ToSolution() const;

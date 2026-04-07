@@ -50,6 +50,7 @@ template <typename DataType_,
           bool kPadO,
           //
           bool kHasUnevenSplits,
+          bool kMergeNumHeadGroupsSeqLenQ,
           //
           FmhaSplitKVPipelineTag kPipelineTag>
 struct FmhaFwdSplitKVWrapper
@@ -79,8 +80,7 @@ struct FmhaFwdSplitKVWrapper
                                                 false, // kDoFp8StaticQuant
                                                 false, // kIsPagedKV
                                                 kHasUnevenSplits,
-                                                // TODO: Add support for kMergeNumHeadGroupsSeqLenQ
-                                                false,  // kMergeNumHeadGroupsSeqLenQ
+                                                kMergeNumHeadGroupsSeqLenQ,
                                                 -1,     // kBlockPerCu
                                                 false>; // kHasSink
 

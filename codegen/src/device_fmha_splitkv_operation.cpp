@@ -18,7 +18,7 @@ static const char* const FmhaFwdSplitKVWrapperTemplate =
     "${WM0}, ${WN0}, ${WK0}, ${WM1}, ${WN1}, ${WK1}, "
     "${IsVRowMajor}, "
     "${PadM}, ${PadN}, ${PadK}, ${PadO}, "
-    "${HasUnevenSplits}, "
+    "${HasUnevenSplits}, ${MergeNumHeadGroupsSeqLenQ}, "
     "ck_tile::FmhaSplitKVPipelineTag::${PipelineTag}>";
 
 static bool IsGfx9(const std::string& arch)
@@ -95,6 +95,10 @@ std::vector<Operation> Operation::CreateOperations(const Problem& prob, const st
         // Check if seqlen_k is evenly divisible across splits and tiles
         bool has_uneven_splits = (prob.N % (tile.bn0 * prob.num_splits) != 0);
 
+        // GQA decode optimization: merge head groups with seqlen_q
+        // Applies when hdim=128, seqlen_q=1, nhead_k < nhead_q
+        bool merge_heads = (bucket.bucket_hdim == 128) && (prob.M == 1) && (prob.nhead_k < prob.nhead);
+
         // Generate operations for pipeline variants, filtering invalid combinations
         for(const auto& pipeline_name : {"qr", "qr_nwarp_sshuffle"})
         {
@@ -103,15 +107,16 @@ std::vector<Operation> Operation::CreateOperations(const Problem& prob, const st
                 continue;
 
             Operation op;
-            op.tile              = tile;
-            op.pipeline          = pipeline_name;
-            op.is_v_rowmajor     = prob.is_v_rowmajor;
-            op.dtype             = prob.dtype;
-            op.pad_m             = needs_pad_m;
-            op.pad_n             = needs_pad_n;
-            op.pad_k             = needs_pad_k;
-            op.pad_o             = needs_pad_o;
-            op.has_uneven_splits = has_uneven_splits;
+            op.tile                           = tile;
+            op.pipeline                       = pipeline_name;
+            op.is_v_rowmajor                  = prob.is_v_rowmajor;
+            op.dtype                          = prob.dtype;
+            op.pad_m                          = needs_pad_m;
+            op.pad_n                          = needs_pad_n;
+            op.pad_k                          = needs_pad_k;
+            op.pad_o                          = needs_pad_o;
+            op.has_uneven_splits              = has_uneven_splits;
+            op.merge_num_head_groups_seqlen_q = merge_heads;
             result.push_back(op);
         }
     }
@@ -157,6 +162,7 @@ Solution Operation::ToSolution() const
         {"PadO", pad_o ? "true" : "false"},
 
         {"HasUnevenSplits", has_uneven_splits ? "true" : "false"},
+        {"MergeNumHeadGroupsSeqLenQ", merge_num_head_groups_seqlen_q ? "true" : "false"},
 
         {"PipelineTag", pipeline == "qr_nwarp_sshuffle" ? "QR_NWARP_SSHUFFLE" : "QR"},
     };
