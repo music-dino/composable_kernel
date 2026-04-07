@@ -21,7 +21,7 @@ struct FmhaFwdSplitKVCombineWrapper
 {
     using FmhaTraits = TileFmhaFwdSplitKVCombineTraits<kPadSeqLenQ,
                                                        kPadHeadDimV,
-                                                       true,   // kStoreLSE (always output LSE)
+                                                       false,  // kStoreLSE (don't output combined LSE)
                                                        false,  // kDoFp8StaticQuant
                                                        kLogMaxSplits,
                                                        -1>;    // kBlockPerCu
@@ -44,7 +44,6 @@ struct FmhaFwdSplitKVCombineWrapper
     // Tensor layouts:
     // lse_acc: [batch, nhead, num_splits, M] (input from splitkv)
     // o_acc:   [batch, nhead, num_splits, M, O] (input from splitkv)
-    // lse:     [batch, nhead, M] (output)
     // o:       [batch, nhead, M, O] (output)
     struct Descriptor
     {
@@ -54,16 +53,13 @@ struct FmhaFwdSplitKVCombineWrapper
         index_t lse_acc_stride_batch, lse_acc_stride_nhead, lse_acc_stride_split;
         index_t o_acc_stride_batch, o_acc_stride_nhead, o_acc_stride_split, o_acc_stride_m;
 
-        index_t lse_stride_batch, lse_stride_nhead;
         index_t o_stride_batch, o_stride_nhead, o_stride_m;
 
-        CK_TILE_HOST_DEVICE constexpr bool IsValid() const { return Kernel::kIsAvailable; }
+        CK_TILE_HOST_DEVICE constexpr bool IsValid() const { return true; }
     };
 
     template <typename LseAccStrides,
-              typename OAccDims,
               typename OAccStrides,
-              typename LseStrides,
               typename OStrides>
     CK_TILE_HOST_DEVICE static constexpr auto make_descriptor(index_t batch,
                                                               index_t nhead,
@@ -72,7 +68,6 @@ struct FmhaFwdSplitKVCombineWrapper
                                                               index_t num_splits,
                                                               LseAccStrides lse_acc_strides,
                                                               OAccStrides o_acc_strides,
-                                                              LseStrides lse_strides,
                                                               OStrides o_strides)
     {
         return Descriptor{batch,
@@ -90,9 +85,6 @@ struct FmhaFwdSplitKVCombineWrapper
                           o_acc_strides[number<2>{}],
                           o_acc_strides[number<3>{}],
                           //
-                          lse_strides[number<0>{}],
-                          lse_strides[number<1>{}],
-                          //
                           o_strides[number<0>{}],
                           o_strides[number<1>{}],
                           o_strides[number<2>{}]};
@@ -101,7 +93,6 @@ struct FmhaFwdSplitKVCombineWrapper
     CK_TILE_DEVICE static void Run(const Descriptor& desc,
                                    const float* lse_acc_ptr,
                                    const float* o_acc_ptr,
-                                   float* lse_ptr,
                                    DataType_* o_ptr)
     {
         using Kargs = typename Kernel::Kargs;
@@ -125,11 +116,6 @@ struct FmhaFwdSplitKVCombineWrapper
 
         kargs.split_stride_lse_acc = desc.lse_acc_stride_split;
         kargs.split_stride_o_acc   = desc.o_acc_stride_split;
-
-        // LSE output (always enabled with kStoreLSE = true)
-        kargs.lse_ptr          = lse_ptr;
-        kargs.nhead_stride_lse = desc.lse_stride_nhead;
-        kargs.batch_stride_lse = desc.lse_stride_batch;
 
         kargs.batch_stride_lse_acc = desc.lse_acc_stride_batch;
         kargs.batch_stride_o_acc   = desc.o_acc_stride_batch;

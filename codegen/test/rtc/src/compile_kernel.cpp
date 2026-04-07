@@ -95,6 +95,7 @@ kernel clang_compile_kernel(const std::vector<src_file>& srcs, compile_options o
     tmp_dir td{"compile"};
     options.flags += " -I. -O3";
     options.flags += " -std=c++20";
+    options.flags += " -Wno-unknown-warning-option";
     // options.flags += " -DCK_TILE_FMHA_FWD_FAST_EXP2=1";
     // options.flags += " -fgpu-flush-denormals-to-zero";
     options.flags += " --offload-arch=" + get_device_name();
@@ -284,6 +285,7 @@ static kernel hiprtc_compile_kernel(const std::vector<src_file>& srcs, compile_o
     options.flags += " -std=c++20";
     options.flags += " -DCK_CODE_GEN_RTC";
     options.flags += " -Wno-return-type";
+    options.flags += " -Wno-unknown-warning-option";
     // options.flags += " -DCK_TILE_FMHA_FWD_FAST_EXP2=1";
     // options.flags += " -fgpu-flush-denormals-to-zero";
     options.flags += " --offload-arch=" + get_device_name();
