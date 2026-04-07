@@ -29,9 +29,9 @@ file(GLOB_RECURSE CK_TILE_KERNEL_FILES CONFIGURE_DEPENDS
     ${CK_ROOT}/include/ck_tile/*.hpp)
 add_embed_library(ck_tile_headers ${CK_TILE_KERNEL_FILES} RELATIVE ${CK_ROOT}/include)
 
-# Embed codegen device headers (wrapper.hpp for FMHA RTC)
+# Embed codegen device headers (wrapper.hpp files for FMHA RTC)
 file(GLOB_RECURSE CK_CODEGEN_DEVICE_FILES CONFIGURE_DEPENDS
-    ${CMAKE_CURRENT_SOURCE_DIR}/include/ck/host/device_fmha_fwd/wrapper.hpp)
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/ck/host/device_fmha_*/wrapper.hpp)
 add_embed_library(ck_codegen_headers ${CK_CODEGEN_DEVICE_FILES} RELATIVE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
 # Embed rocm-cxx replacement headers for HIPRTC

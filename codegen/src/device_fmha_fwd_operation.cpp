@@ -4,7 +4,6 @@
 #include "ck/host/device_fmha_fwd/operation.hpp"
 #include "ck/host/device_fmha_fwd/problem.hpp"
 #include "ck/host/stringutils.hpp"
-#include <map>
 #include <string>
 #include <vector>
 
@@ -24,7 +23,7 @@ static const char* const FmhaFwdWrapperTemplate =
 static bool IsGfx950(const std::string& arch) { return arch.find("gfx950") == 0; }
 static bool IsGfx12(const std::string& arch) { return arch.find("gfx12") == 0; }
 
-using TileMap = std::map<std::pair<std::size_t, std::size_t>, std::vector<TileConfig>>;
+using TileMap = device_fmha_common::TileMap;
 
 // gfx9 fp16/bf16 tile configurations
 //
@@ -356,15 +355,7 @@ std::vector<Operation> Operation::CreateOperations(const Problem& prob, const st
     return result;
 }
 
-static std::string ToDataTypeString(DataType dtype)
-{
-    switch(dtype)
-    {
-    case DataType::Half: return "ck_tile::fp16_t";
-    case DataType::Float: return "float";
-    default: return "ck_tile::fp16_t";
-    }
-}
+using device_fmha_common::ToDataTypeString;
 
 Solution Operation::ToSolution() const
 {
