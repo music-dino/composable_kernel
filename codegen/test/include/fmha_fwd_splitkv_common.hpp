@@ -204,5 +204,37 @@ std::string make_splitkv_kernel_source(const ck::host::device_fmha_splitkv::Prob
          {"scale_s", std::to_string(params.scale_s) + "f"}});
 }
 
+inline void print_solution(const Solution& solution)
+{
+    std::cout << "  DataType:                   " << solution.GetTemplateParameter("DataType") << "\n"
+              << "  BM0:                        " << solution.GetTemplateParameter("BM0") << "\n"
+              << "  BN0:                        " << solution.GetTemplateParameter("BN0") << "\n"
+              << "  BK0:                        " << solution.GetTemplateParameter("BK0") << "\n"
+              << "  BN1:                        " << solution.GetTemplateParameter("BN1") << "\n"
+              << "  BK1:                        " << solution.GetTemplateParameter("BK1") << "\n"
+              << "  BK0Max:                     " << solution.GetTemplateParameter("BK0Max") << "\n"
+              << "  RM0:                        " << solution.GetTemplateParameter("RM0") << "\n"
+              << "  RN0:                        " << solution.GetTemplateParameter("RN0") << "\n"
+              << "  RK0:                        " << solution.GetTemplateParameter("RK0") << "\n"
+              << "  RM1:                        " << solution.GetTemplateParameter("RM1") << "\n"
+              << "  RN1:                        " << solution.GetTemplateParameter("RN1") << "\n"
+              << "  RK1:                        " << solution.GetTemplateParameter("RK1") << "\n"
+              << "  WM0:                        " << solution.GetTemplateParameter("WM0") << "\n"
+              << "  WN0:                        " << solution.GetTemplateParameter("WN0") << "\n"
+              << "  WK0:                        " << solution.GetTemplateParameter("WK0") << "\n"
+              << "  WM1:                        " << solution.GetTemplateParameter("WM1") << "\n"
+              << "  WN1:                        " << solution.GetTemplateParameter("WN1") << "\n"
+              << "  WK1:                        " << solution.GetTemplateParameter("WK1") << "\n"
+              << "  IsVRowMajor:                " << solution.GetTemplateParameter("IsVRowMajor") << "\n"
+              << "  PadM:                       " << solution.GetTemplateParameter("PadM") << "\n"
+              << "  PadN:                       " << solution.GetTemplateParameter("PadN") << "\n"
+              << "  PadK:                       " << solution.GetTemplateParameter("PadK") << "\n"
+              << "  PadO:                       " << solution.GetTemplateParameter("PadO") << "\n"
+              << "  HasUnevenSplits:            " << solution.GetTemplateParameter("HasUnevenSplits") << "\n"
+              << "  MergeNumHeadGroupsSeqLenQ:  " << solution.GetTemplateParameter("MergeNumHeadGroupsSeqLenQ") << "\n"
+              << "  PipelineTag:                " << solution.GetTemplateParameter("PipelineTag") << "\n"
+              << std::flush;
+}
+
 } // namespace host
 } // namespace ck
