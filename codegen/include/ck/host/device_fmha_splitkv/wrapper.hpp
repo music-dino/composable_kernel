@@ -18,6 +18,7 @@ enum class FmhaSplitKVPipelineTag
 };
 
 template <typename DataType_,
+          typename OaccOutType_,
           // Block tile
           index_t kBM0,
           index_t kBN0,
@@ -96,8 +97,8 @@ struct FmhaFwdSplitKVWrapper
                                            DataType_, // Bias type
                                            float,     // LSE type
                                            DataType_, // P type
-                                           float,     // Oacc type
-                                           float,     // OaccOut type (workspace output)
+                                           float,         // Oacc type
+                                           OaccOutType_,  // OaccOut type (workspace output)
                                            FmhaShape,
                                            false, // kIsGroupMode (batch mode only)
                                            ComposedAttention<false, CK_TILE_FMHA_FWD_FAST_EXP2>,
@@ -109,7 +110,7 @@ struct FmhaFwdSplitKVWrapper
                            BlockFmhaFwdSplitKVPipelineNWarpSShuffleQRKSVS<PipelineProblem>,
                            BlockFmhaFwdSplitKVPipelineQRKSVS<PipelineProblem>>;
 
-    using Epilogue = Default2DEpilogue<Default2DEpilogueProblem<float, float, false, false>>;
+    using Epilogue = Default2DEpilogue<Default2DEpilogueProblem<float, OaccOutType_, false, false>>;
 
     using Kernel = FmhaFwdSplitKVKernel<Pipeline, Epilogue>;
 
@@ -193,7 +194,7 @@ struct FmhaFwdSplitKVWrapper
                                    const DataType_* k_ptr,
                                    const DataType_* v_ptr,
                                    float* lse_acc_ptr,
-                                   float* o_acc_ptr)
+                                   OaccOutType_* o_acc_ptr)
     {
         using Kargs = typename Kernel::Kargs;
         Kargs kargs{};
@@ -215,7 +216,11 @@ struct FmhaFwdSplitKVWrapper
         kargs.nhead_ratio_qk = desc.nhead / desc.nhead_k;
         kargs.num_splits     = desc.num_splits;
 
+#if CK_TILE_FMHA_FWD_FAST_EXP2
+        kargs.scale_s = static_cast<float>(scale_s * ck_tile::log2e_v<>);
+#else
         kargs.scale_s = scale_s;
+#endif
 
         kargs.stride_q     = desc.q_stride_m;
         kargs.stride_k     = desc.k_stride_n;

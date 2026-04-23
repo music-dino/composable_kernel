@@ -40,6 +40,11 @@ std::unordered_map<std::string, std::string> GetTileHeadersForRTC()
 
     for(auto& [name, content] : tile_hdrs)
     {
+        if(name == "ck_tile/core/utility/env.hpp")
+        {
+            result.emplace(std::string(name), "");
+            continue;
+        }
         result.emplace(std::string(name), strip_host_bodies(content));
     }
 

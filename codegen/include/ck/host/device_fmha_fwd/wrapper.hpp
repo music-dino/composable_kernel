@@ -229,7 +229,11 @@ struct FmhaFwdWrapper
         kargs.num_head_q     = desc.nhead;
         kargs.nhead_ratio_qk = desc.nhead / desc.nhead_k;
 
+#if CK_TILE_FMHA_FWD_FAST_EXP2
+        kargs.scale_s = static_cast<float>(scale_s * ck_tile::log2e_v<>);
+#else
         kargs.scale_s = scale_s;
+#endif
 
         kargs.stride_q = desc.q_stride_m;
         kargs.stride_k = desc.k_stride_n;

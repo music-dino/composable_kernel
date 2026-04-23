@@ -47,26 +47,40 @@ std::vector<Operation> Operation::CreateOperations(const Problem& prob, const st
     if(prob.dtype != DataType::Half)
         return result;
 
-    // Constants for Combine kernel
-    constexpr std::size_t kN1 = 32; // tile size for hdim_v (fp16)
-    constexpr std::size_t kM0 = 8;  // tile size for seqlen_q (derived from kN1)
+    // OaccDataType is float, so MaxVectorSize = 16 / sizeof(float) = 4
+    // NThreads = kN1 / MaxVectorSize = kN1 / 4
+    // kM0 = warp_size / NThreads = 64 / (kN1 / 4) = 256 / kN1
+    // TODO make architecture-specific
+    constexpr std::size_t warp_size      = 64;
+    constexpr std::size_t max_vector_size = 4; // 16 / sizeof(float)
 
-    // Compute exact padding needs
-    bool needs_pad_seqlen_q = (prob.M % kM0 != 0);
-    bool needs_pad_hdim_v   = (prob.O % kN1 != 0);
-
-    // Compute log_max_splits
     std::size_t log_max_splits = ComputeLogMaxSplits(prob.num_splits);
+    std::size_t kMaxSplits     = 1ULL << log_max_splits;
 
-    Operation op;
-    op.hdim_v         = prob.O;
-    op.n1             = kN1;
-    op.log_max_splits = log_max_splits;
-    op.dtype          = prob.dtype;
-    op.pad_seqlen_q   = needs_pad_seqlen_q;
-    op.pad_hdim_v     = needs_pad_hdim_v;
+    // MakeLSEaccRegTileDistribution caps NThreads at 8, so the real constraint is:
+    // kM0 * min(kMaxSplits, 8) >= warp_size, and since kMaxSplits >= 8 always,
+    // this simplifies to kM0 >= 8, i.e. kN1 <= 32
+    constexpr std::size_t max_kN1 = (warp_size * max_vector_size) / 8; // 256 / 8 = 32
 
-    result.push_back(op);
+    for(int i = 3; i <= 8; ++i)
+    {
+        std::size_t kN1 = 1ULL << i;
+        if(kN1 > prob.O || kN1 > max_kN1)
+            break;
+        if(prob.O & (kN1 - 1))
+            continue;
+
+        std::size_t kM0 = (warp_size * max_vector_size) / kN1;
+
+        Operation op;
+        op.hdim_v         = prob.O;
+        op.n1             = kN1;
+        op.log_max_splits = log_max_splits;
+        op.dtype          = prob.dtype;
+        op.pad_seqlen_q   = (prob.M % kM0 != 0);
+        op.pad_hdim_v     = false; // kN1 divides hdim_v exactly
+        result.push_back(op);
+    }
 
     return result;
 }
@@ -75,10 +89,15 @@ using device_fmha_common::ToDataTypeString;
 
 Solution Operation::ToSolution() const
 {
+    constexpr std::size_t warp_size       = 64;
+    constexpr std::size_t max_vector_size_ = 4; // 16 / sizeof(float)
+    std::size_t m0 = (warp_size * max_vector_size_) / n1;
+
     std::unordered_map<std::string, std::string> values = {
         {"DataType", ToDataTypeString(dtype)},
         {"HeadDimV", std::to_string(hdim_v)},
         {"N1", std::to_string(n1)},
+        {"M0", std::to_string(m0)},
         {"LogMaxSplits", std::to_string(log_max_splits)},
         {"PadSeqLenQ", pad_seqlen_q ? "true" : "false"},
         {"PadHeadDimV", pad_hdim_v ? "true" : "false"},

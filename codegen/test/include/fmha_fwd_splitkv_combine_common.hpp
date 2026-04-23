@@ -102,7 +102,7 @@ get_splitkv_combine_launch_dims(const ck::host::Solution& solution,
                                 const ck::host::device_fmha_splitkv_combine::Problem& prob)
 {
     auto kN1 = solution.GetTemplateParameter<std::size_t>("N1");
-    auto kM0 = kN1 / 4;
+    auto kM0 = solution.GetTemplateParameter<std::size_t>("M0");
 
     constexpr std::size_t warp_size  = 64;
     constexpr std::size_t num_warps  = 4;

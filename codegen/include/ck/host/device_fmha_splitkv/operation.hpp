@@ -22,8 +22,9 @@ struct Operation
 
     std::string pipeline = "qr"; // "qr" or "qr_nwarp_sshuffle"
 
-    bool is_v_rowmajor = true;
-    DataType dtype     = DataType::Half;
+    bool is_v_rowmajor   = true;
+    DataType dtype       = DataType::Half;
+    DataType o_acc_dtype = DataType::Float;
 
     bool pad_m = true; // pad seqlen_q
     bool pad_n = true; // pad seqlen_k

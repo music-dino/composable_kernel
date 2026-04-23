@@ -96,8 +96,8 @@ kernel clang_compile_kernel(const std::vector<src_file>& srcs, compile_options o
     options.flags += " -I. -O3";
     options.flags += " -std=c++20";
     options.flags += " -Wno-unknown-warning-option";
-    // options.flags += " -DCK_TILE_FMHA_FWD_FAST_EXP2=1";
-    // options.flags += " -fgpu-flush-denormals-to-zero";
+    options.flags += " -DCK_TILE_FMHA_FWD_FAST_EXP2=1";
+    options.flags += " -fgpu-flush-denormals-to-zero";
     options.flags += " --offload-arch=" + get_device_name();
     std::string out;
 
@@ -280,16 +280,16 @@ std::vector<std::vector<char>> compile_hip_src_with_hiprtc(const std::vector<src
 
 static kernel hiprtc_compile_kernel(const std::vector<src_file>& srcs, compile_options options)
 {
-    std::cout << "hiprtc_compile_kernel" << std::endl;
+    // std::cout << "hiprtc_compile_kernel" << std::endl;
     options.flags += " -I. -O3";
     options.flags += " -std=c++20";
     options.flags += " -DCK_CODE_GEN_RTC";
     options.flags += " -Wno-return-type";
     options.flags += " -Wno-unknown-warning-option";
-    // options.flags += " -DCK_TILE_FMHA_FWD_FAST_EXP2=1";
-    // options.flags += " -fgpu-flush-denormals-to-zero";
+    options.flags += " -DCK_TILE_FMHA_FWD_FAST_EXP2=1";
+    options.flags += " -fgpu-flush-denormals-to-zero";
     options.flags += " --offload-arch=" + get_device_name();
-    std::cout << options.flags << std::endl;
+    // std::cout << options.flags << std::endl;
     auto cos = compile_hip_src_with_hiprtc(srcs, options);
     if(cos.size() != 1)
         std::runtime_error("No code object");

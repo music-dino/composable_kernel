@@ -24,7 +24,8 @@ struct Problem
     std::size_t nhead_k    = 0; // nhead_k (number of K/V heads, nhead_k <= nhead)
     std::size_t num_splits = 0; // number of KV splits for flash decoding
 
-    DataType dtype = DataType::Half;
+    DataType dtype         = DataType::Half;
+    DataType o_acc_dtype   = DataType::Float; // output accumulation type for o_acc workspace
 
     bool is_v_rowmajor = true; // true=[N,O], false=[O,N]
 

@@ -13,7 +13,7 @@ namespace host {
 namespace device_fmha_splitkv {
 
 static const char* const FmhaFwdSplitKVWrapperTemplate =
-    "ck_tile::FmhaFwdSplitKVWrapper<${DataType}, "
+    "ck_tile::FmhaFwdSplitKVWrapper<${DataType}, ${OaccOutType}, "
     "${BM0}, ${BN0}, ${BK0}, ${BN1}, ${BK1}, ${BK0Max}, "
     "${RM0}, ${RN0}, ${RK0}, ${RM1}, ${RN1}, ${RK1}, "
     "${WM0}, ${WN0}, ${WK0}, ${WM1}, ${WN1}, ${WK1}, "
@@ -273,6 +273,7 @@ std::vector<Operation> Operation::CreateOperations(const Problem& prob, const st
             op.pipeline                       = pipeline_name;
             op.is_v_rowmajor                  = prob.is_v_rowmajor;
             op.dtype                          = prob.dtype;
+            op.o_acc_dtype                    = prob.o_acc_dtype;
             op.pad_m                          = needs_pad_m;
             op.pad_n                          = needs_pad_n;
             op.pad_k                          = needs_pad_k;
@@ -292,6 +293,7 @@ Solution Operation::ToSolution() const
 {
     std::unordered_map<std::string, std::string> values = {
         {"DataType", ToDataTypeString(dtype)},
+        {"OaccOutType", ToDataTypeString(o_acc_dtype)},
 
         {"BM0", std::to_string(tile.bm0)},
         {"BN0", std::to_string(tile.bn0)},
