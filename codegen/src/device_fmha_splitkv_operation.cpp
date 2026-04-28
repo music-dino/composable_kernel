@@ -219,7 +219,6 @@ GetTileConfigsForHdim(const std::string& arch, DataType dtype, std::size_t K, st
     {
         if(K <= key.first && O <= key.second)
         {
-            std::cout << key.first << " " << key.second << std::endl;
             result.bucket_hdim   = key.first;
             result.bucket_hdim_v = key.second;
             result.tiles         = tiles;
