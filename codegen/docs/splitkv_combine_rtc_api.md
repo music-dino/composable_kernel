@@ -1,0 +1,408 @@
+# SplitKV Combine RTC API
+
+The SplitKV Combine kernel takes the intermediate outputs from the SplitKV kernel (`o_acc` and `lse_acc`) and produces the final attention output. It weights each split's partial output by `exp(local_LSE - global_LSE)` and sums them. All internal computation is done in `float`; the final result is cast to the output type (e.g., `fp16`) only when writing to global memory.
+
+## Headers
+
+```cpp
+#include "ck/host/device_fmha_splitkv_combine/problem.hpp"
+#include "ck/host/device_fmha_splitkv_combine/operation.hpp"
+#include "ck/host/stringutils.hpp"
+#include "ck/host/utils.hpp"
+#include "ck/host/headers.hpp"
+#include <rtc/compile_kernel.hpp>
+```
+
+Common test helpers (kernel template, params, launch dims) are in:
+
+```cpp
+#include "fmha_fwd_splitkv_combine_common.hpp"  // codegen/test/include/
+```
+
+## Namespace
+
+```cpp
+namespace combine = ck::host::device_fmha_splitkv_combine;
+```
+
+## Step 1: Define the Problem
+
+```cpp
+combine::Problem prob;
+prob.batch      = 2;
+prob.nhead      = 8;      // number of Q heads
+prob.M          = 1;      // seqlen_q
+prob.O          = 128;    // hdim_v
+prob.num_splits = 4;      // must match the SplitKV kernel's num_splits
+prob.dtype      = ck::host::DataType::Half;
+```
+
+### Problem fields
+
+| Field | Description |
+|-------|-------------|
+| `M` | Query sequence length. |
+| `O` | Head dimension for V. |
+| `batch` | Batch size. |
+| `nhead` | Number of Q attention heads. |
+| `num_splits` | Number of KV splits (must match the SplitKV kernel). |
+| `dtype` | Output data type (`DataType::Half`). |
+
+## Step 2: Get Solutions
+
+```cpp
+auto solutions = prob.GetSolutions("gfx90a");
+```
+
+Returns a `std::vector<ck::host::Solution>`. Multiple solutions may be returned with different `kN1` tile sizes. The `kN1` parameter controls how many elements of `hdim_v` are processed per tile iteration. Valid `kN1` values are powers of 2 in the range [8, 32] that evenly divide `hdim_v`. The corresponding `kM0` (seqlen_q tile size) is derived as `256 / kN1`.
+
+| kN1 | kM0 | Notes |
+|-----|-----|-------|
+| 8 | 32 | Processes more seqlen_q rows per tile |
+| 16 | 16 | Balanced |
+| 32 | 8 | Processes more hdim_v per tile (original default) |
+
+### Inspecting a solution
+
+```cpp
+auto kN1 = solution.GetTemplateParameter<std::size_t>("N1");
+auto kM0 = solution.GetTemplateParameter<std::size_t>("M0");
+auto log_max_splits = solution.GetTemplateParameter<std::size_t>("LogMaxSplits");
+```
+
+Available template parameters: `DataType`, `HeadDimV`, `N1`, `M0`, `LogMaxSplits`, `PadSeqLenQ`, `PadHeadDimV`.
+
+`M0` is not part of the wrapper template string but is included in the solution for convenience (e.g., for launch dimension calculation).
+
+## Step 3: Compute Parameters and Strides
+
+The kernel needs stride information for all tensors. Here is a reference implementation for computing contiguous strides:
+
+```cpp
+struct SplitKVCombineParams
+{
+    std::size_t batch;
+    std::size_t nhead;
+    std::size_t M; // seqlen_q
+    std::size_t O; // hdim_v
+    std::size_t num_splits;
+
+    // LSE_acc strides [batch, nhead, num_splits, M]
+    std::size_t lse_acc_stride_split;
+    std::size_t lse_acc_stride_nhead;
+    std::size_t lse_acc_stride_batch;
+
+    // O_acc strides [batch, nhead, num_splits, M, O]
+    std::size_t o_acc_stride_m;
+    std::size_t o_acc_stride_split;
+    std::size_t o_acc_stride_nhead;
+    std::size_t o_acc_stride_batch;
+
+    // O strides [batch, nhead, M, O]
+    std::size_t o_stride_m;
+    std::size_t o_stride_nhead;
+    std::size_t o_stride_batch;
+};
+
+SplitKVCombineParams make_splitkv_combine_params(const combine::Problem& prob)
+{
+    SplitKVCombineParams p;
+    p.batch      = prob.batch;
+    p.nhead      = prob.nhead;
+    p.M          = prob.M;
+    p.O          = prob.O;
+    p.num_splits = prob.num_splits;
+
+    // LSE_acc - [batch, nhead, num_splits, M]
+    p.lse_acc_stride_split = prob.M;
+    p.lse_acc_stride_nhead = prob.num_splits * prob.M;
+    p.lse_acc_stride_batch = prob.nhead * prob.num_splits * prob.M;
+
+    // O_acc - [batch, nhead, num_splits, M, O]
+    p.o_acc_stride_m     = prob.O;
+    p.o_acc_stride_split = prob.M * prob.O;
+    p.o_acc_stride_nhead = prob.num_splits * prob.M * prob.O;
+    p.o_acc_stride_batch = prob.nhead * prob.num_splits * prob.M * prob.O;
+
+    // O - [batch, nhead, M, O]
+    p.o_stride_m     = prob.O;
+    p.o_stride_nhead = prob.M * prob.O;
+    p.o_stride_batch = prob.nhead * prob.M * prob.O;
+
+    return p;
+}
+```
+
+### Tensor layouts and strides
+
+| Tensor | Shape | Type | Description |
+|--------|-------|------|-------------|
+| lse_acc (input) | `[batch, nhead, num_splits, M]` | `float` | Log-sum-exp from SplitKV kernel |
+| o_acc (input) | `[batch, nhead, num_splits, M, O]` | `float` | Partial attention outputs from SplitKV kernel |
+| o (output) | `[batch, nhead, M, O]` | `fp16` | Final combined attention output |
+
+The strides for `lse_acc` and `o_acc` must match those used by the SplitKV kernel.
+
+## Step 4: Generate Kernel Source
+
+The kernel source is generated by interpolating a template string with the problem dimensions and strides. Here is the kernel template and the function that generates the source:
+
+```cpp
+const std::string combine_kernel_template = R"__ck__(
+#include <cmath>
+#include <cstdint>
+#include <cassert>
+#include <sstream>
+#include <${include}>
+
+using KernelType = ${template};
+
+extern "C" __launch_bounds__(KernelType::Kernel::kBlockSize, KernelType::Kernel::kBlockPerCu)
+__global__ void f(const float* lse_acc, const float* o_acc, ${dtype}* o) {
+
+    using Kernel = KernelType;
+
+    constexpr auto desc = Kernel::make_descriptor(
+        ${batch}, ${nhead}, ${m}, ${o_dim}, ${num_splits},
+        ck_tile::make_tuple(${lse_acc_stride_batch}, ${lse_acc_stride_nhead}, ${lse_acc_stride_split}),
+        ck_tile::make_tuple(${o_acc_stride_batch}, ${o_acc_stride_nhead}, ${o_acc_stride_split}, ${o_acc_stride_m}),
+        ck_tile::make_tuple(${o_stride_batch}, ${o_stride_nhead}, ${o_stride_m}));
+
+    static_assert(desc.IsValid(), "Invalid Combine kernel configuration");
+
+    Kernel::Run(desc, lse_acc, o_acc, o);
+}
+)__ck__";
+
+std::string make_splitkv_combine_kernel_source(const combine::Problem& prob,
+                                               const ck::host::Solution& solution,
+                                               const SplitKVCombineParams& params)
+{
+    return ck::host::InterpolateString(
+        combine_kernel_template,
+        {{"include", prob.GetIncludeHeader()},
+         {"template", solution.ToTemplateString()},
+         {"dtype", "ck_tile::fp16_t"},
+         {"batch", std::to_string(params.batch)},
+         {"nhead", std::to_string(params.nhead)},
+         {"m", std::to_string(params.M)},
+         {"o_dim", std::to_string(params.O)},
+         {"num_splits", std::to_string(params.num_splits)},
+         {"lse_acc_stride_batch", std::to_string(params.lse_acc_stride_batch)},
+         {"lse_acc_stride_nhead", std::to_string(params.lse_acc_stride_nhead)},
+         {"lse_acc_stride_split", std::to_string(params.lse_acc_stride_split)},
+         {"o_acc_stride_batch", std::to_string(params.o_acc_stride_batch)},
+         {"o_acc_stride_nhead", std::to_string(params.o_acc_stride_nhead)},
+         {"o_acc_stride_split", std::to_string(params.o_acc_stride_split)},
+         {"o_acc_stride_m", std::to_string(params.o_acc_stride_m)},
+         {"o_stride_batch", std::to_string(params.o_stride_batch)},
+         {"o_stride_nhead", std::to_string(params.o_stride_nhead)},
+         {"o_stride_m", std::to_string(params.o_stride_m)}});
+}
+```
+
+The generated kernel has the signature:
+
+```cpp
+extern "C" __global__ void f(const float* lse_acc, const float* o_acc, fp16_t* o);
+```
+
+The inputs `lse_acc` and `o_acc` are always `float` — this is a hard constraint from the kernel internals (`static_assert(LSEDataType == OaccDataType)` in the combine pipeline). The output `o` is cast from the internal `float` accumulation to `DataType_` (e.g., `fp16_t`) by the epilogue.
+
+## Step 5: Compile the Kernel
+
+```cpp
+auto srcs = get_tile_headers_for_test();
+srcs.push_back({"main.cpp", source});
+
+rtc::compile_options opts;
+opts.kernel_name = "f";
+
+auto kernel = rtc::compile_kernel(srcs, opts);
+```
+
+## Step 6: Compute Launch Dimensions
+
+Reference implementation:
+
+```cpp
+std::pair<dim3, dim3>
+get_splitkv_combine_launch_dims(const ck::host::Solution& solution,
+                                const combine::Problem& prob)
+{
+    auto kN1 = solution.GetTemplateParameter<std::size_t>("N1");
+    auto kM0 = solution.GetTemplateParameter<std::size_t>("M0");
+
+    constexpr std::size_t block_size = 256; // 4 warps * 64 threads
+
+    auto grid_m = (prob.M + kM0 - 1) / kM0;
+    auto grid_n = (prob.O + kN1 - 1) / kN1;
+
+    dim3 grid(grid_m * grid_n, prob.nhead, prob.batch);
+    dim3 block(block_size, 1, 1);
+
+    return {grid, block};
+}
+```
+
+The launch dimensions are:
+
+- **grid.x** = `ceil(M / kM0) * ceil(O / kN1)`
+- **grid.y** = `nhead`
+- **grid.z** = `batch`
+- **block.x** = 256 (4 warps * 64 threads per warp, hardcoded)
+
+Where `kM0` and `kN1` are read from the solution. The relationship between them is:
+
+```
+kM0 = 256 / kN1
+```
+
+This is derived from the kernel internals:
+- `MaxVectorSize = 16 / sizeof(float) = 4`
+- `NThreads = kN1 / MaxVectorSize`
+- `kM0 = warp_size / NThreads = 64 / (kN1 / 4) = 256 / kN1`
+
+## Step 7: Launch
+
+The compiled kernel takes three pointer arguments:
+
+```cpp
+kernel.launch(nullptr, grid, block)(lse_acc_ptr, o_acc_ptr, o_ptr);
+```
+
+Where:
+- `lse_acc_ptr`: `const float*` — log-sum-exp values from the SplitKV kernel
+- `o_acc_ptr`: `const float*` — partial attention outputs from the SplitKV kernel
+- `o_ptr`: `fp16_t*` — final output buffer
+
+## Wrapper Implementation
+
+The full wrapper that gets compiled at runtime:
+
+```cpp
+namespace ck_tile {
+
+template <typename DataType_,
+          index_t kHeadDimV,
+          index_t kN1,           // tile size for hdim_v
+          index_t kLogMaxSplits, // log2 of max splits (3=8, 4=16, 5=32, 6=64, 7=128)
+          bool kPadSeqLenQ,
+          bool kPadHeadDimV>
+struct FmhaFwdSplitKVCombineWrapper
+{
+    using FmhaTraits = TileFmhaFwdSplitKVCombineTraits<kPadSeqLenQ,
+                                                       kPadHeadDimV,
+                                                       false,  // kStoreLSE
+                                                       false,  // kDoFp8StaticQuant
+                                                       kLogMaxSplits,
+                                                       -1>;    // kBlockPerCu
+
+    using PipelineProblem =
+        BlockFmhaSplitKVCombinePipelineProblem<float,       // LSE type
+                                               float,       // Oacc type
+                                               DataType_,   // O type (output)
+                                               kHeadDimV,
+                                               false,       // kIsGroupMode (batch mode only)
+                                               kN1,
+                                               FmhaTraits>;
+
+    using Pipeline = BlockFmhaFwdSplitKVCombinePipeline<PipelineProblem>;
+
+    using Epilogue = Default2DEpilogue<Default2DEpilogueProblem<float, DataType_, false, false>>;
+
+    using Kernel = FmhaFwdSplitKVCombineKernel<Pipeline, Epilogue>;
+
+    // Tensor layouts:
+    // lse_acc: [batch, nhead, num_splits, M] (input from splitkv)
+    // o_acc:   [batch, nhead, num_splits, M, O] (input from splitkv)
+    // o:       [batch, nhead, M, O] (output)
+    struct Descriptor
+    {
+        index_t batch, nhead, M, O;
+        index_t num_splits;
+
+        index_t lse_acc_stride_batch, lse_acc_stride_nhead, lse_acc_stride_split;
+        index_t o_acc_stride_batch, o_acc_stride_nhead, o_acc_stride_split, o_acc_stride_m;
+
+        index_t o_stride_batch, o_stride_nhead, o_stride_m;
+
+        CK_TILE_HOST_DEVICE constexpr bool IsValid() const { return true; }
+    };
+
+    template <typename LseAccStrides,
+              typename OAccStrides,
+              typename OStrides>
+    CK_TILE_HOST_DEVICE static constexpr auto make_descriptor(index_t batch,
+                                                              index_t nhead,
+                                                              index_t seqlen_q,
+                                                              index_t hdim_v,
+                                                              index_t num_splits,
+                                                              LseAccStrides lse_acc_strides,
+                                                              OAccStrides o_acc_strides,
+                                                              OStrides o_strides)
+    {
+        return Descriptor{batch,
+                          nhead,
+                          seqlen_q,
+                          hdim_v,
+                          num_splits,
+                          //
+                          lse_acc_strides[number<0>{}],
+                          lse_acc_strides[number<1>{}],
+                          lse_acc_strides[number<2>{}],
+                          //
+                          o_acc_strides[number<0>{}],
+                          o_acc_strides[number<1>{}],
+                          o_acc_strides[number<2>{}],
+                          o_acc_strides[number<3>{}],
+                          //
+                          o_strides[number<0>{}],
+                          o_strides[number<1>{}],
+                          o_strides[number<2>{}]};
+    }
+
+    CK_TILE_DEVICE static void Run(const Descriptor& desc,
+                                   const float* lse_acc_ptr,
+                                   const float* o_acc_ptr,
+                                   DataType_* o_ptr)
+    {
+        using Kargs = typename Kernel::Kargs;
+        Kargs kargs{};
+
+        kargs.lse_acc_ptr = lse_acc_ptr;
+        kargs.o_acc_ptr   = o_acc_ptr;
+        kargs.o_ptr       = o_ptr;
+
+        kargs.batch      = desc.batch;
+        kargs.seqlen_q   = desc.M;
+        kargs.hdim_v     = desc.O;
+        kargs.num_splits = desc.num_splits;
+
+        kargs.row_stride_o_acc = desc.o_acc_stride_m;
+        kargs.row_stride_o     = desc.o_stride_m;
+
+        kargs.nhead_stride_lse_acc = desc.lse_acc_stride_nhead;
+        kargs.nhead_stride_o_acc   = desc.o_acc_stride_nhead;
+        kargs.nhead_stride_o       = desc.o_stride_nhead;
+
+        kargs.split_stride_lse_acc = desc.lse_acc_stride_split;
+        kargs.split_stride_o_acc   = desc.o_acc_stride_split;
+
+        kargs.batch_stride_lse_acc = desc.lse_acc_stride_batch;
+        kargs.batch_stride_o_acc   = desc.o_acc_stride_batch;
+        kargs.batch_stride_o       = desc.o_stride_batch;
+
+        Kernel{}(kargs);
+    }
+};
+
+} // namespace ck_tile
+```
+
+## Notes
+
+- The `lse_acc` and `o_acc` inputs must be of the same type. This is enforced by a `static_assert` inside the combine pipeline that requires `LSEDataType == OaccDataType`, `float` is recommended for numerical stability
+- `kLogMaxSplits` is automatically computed as `log2(ceil_to_power_of_2(max(num_splits, 8)))`. The minimum is 3 (corresponding to `kMaxSplits = 8`). Unused split slots are filled with `-infinity` LSE values internally.
+- The block size is always 256 (4 warps of 64 threads).
+- Supported architectures: GFX9 family (e.g., `gfx90a`, `gfx942`) except GFX950.

@@ -13,8 +13,7 @@ namespace ck {
 namespace host {
 namespace device_fmha_splitkv {
 
-using TileConfig      = device_fmha_common::TileConfig;
-using HdimBucketResult = device_fmha_common::HdimBucketResult;
+using TileConfig = device_fmha_common::TileConfig;
 
 struct Operation
 {
@@ -41,9 +40,6 @@ struct Operation
 
     Solution ToSolution() const;
 };
-
-HdimBucketResult
-GetTileConfigsForHdim(const std::string& arch, DataType dtype, std::size_t K, std::size_t O);
 
 bool IsSupportedArch(const std::string& arch);
 

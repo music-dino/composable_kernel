@@ -18,14 +18,10 @@ static const char* const FmhaFwdSplitKVCombineWrapperTemplate =
     "${HeadDimV}, ${N1}, ${LogMaxSplits}, "
     "${PadSeqLenQ}, ${PadHeadDimV}>";
 
-static bool IsGfx9(const std::string& arch)
+bool IsSupportedArch(const std::string& arch)
 {
-    return arch.find("gfx9") == 0 && arch.find("gfx950") != 0;
+    return device_fmha_common::IsSupportedFmhaArch(arch);
 }
-
-static bool IsGfx950(const std::string& arch) { return arch.find("gfx950") == 0; }
-
-bool IsSupportedArch(const std::string& arch) { return IsGfx9(arch) || IsGfx950(arch); }
 
 // Compute kLogMaxSplits: log2 of the smallest power-of-2 >= num_splits, with minimum of 8
 // Returns value in range [3, 7] corresponding to max splits of [8, 16, 32, 64, 128]

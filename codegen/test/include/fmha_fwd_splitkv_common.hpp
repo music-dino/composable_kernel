@@ -26,7 +26,7 @@ using KernelType = ${template};
 
 extern "C" __launch_bounds__(KernelType::Kernel::kBlockSize, KernelType::Kernel::kBlockPerCu)
 __global__ void f(const ${dtype}* q, const ${dtype}* k, const ${dtype}* v,
-                  float* o_acc, float* lse_acc) {
+                  _Float16* o_acc, float* lse_acc) {
     
     constexpr float scale_s = ${scale_s};
     
